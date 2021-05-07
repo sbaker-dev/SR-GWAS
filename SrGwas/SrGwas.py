@@ -3,7 +3,11 @@ from bgen_reader import custom_meta_path
 from pysnptools.distreader import Bgen
 from csvObject import CsvObject
 from pathlib import Path
+import pandas as pd
+import numpy as np
 import re
+
+import sys
 
 
 class SrGwas:
@@ -19,7 +23,9 @@ class SrGwas:
 
         # Set the output path for the memory files and load the file reference
         custom_meta_path(validate_path(self.args["memory_file_location"]))
-        self.gen = Bgen(self._select_file_on_chromosome())
+
+        # Load the genetic reference, and sort both it and the external variables so they match on iid
+        self.gen, self.variables = self._setup_variables()
 
         # Set output file
         output = FileOut(validate_path(self.args["output_directory"]), self.args["output_name"], "csv")
@@ -27,11 +33,6 @@ class SrGwas:
 
         # Isolate which snps are to be used
         self.snp_ids = self._select_snps()
-
-        # Set variable seek position on iid
-        self.variables = validate_path(self.args["variables"])
-        self.zipped = self.variables.suffix == ".gz"
-        self.iid_location = self._set_seeks()
 
         # Start the method that has been assigned if method has been set
         if self.args["method"]:
@@ -56,6 +57,40 @@ class SrGwas:
 
         raise IndexError(f"Failed to find any relevant file for {self.target_chromosome} in {self.gen_directory}")
 
+    def _setup_variables(self):
+        """
+        The order of IID in genetic file may not equal to submission, this sorts the arrays to be equivalent.
+
+        :return: Bgenfile for this chromosome as well as a pandas dataframe of the external variables
+        :rtype: (Bgen, pd.DataFrame)
+        """
+        # Load the variables as pandas dataframe and setup the reference genetic file for this chromosome
+        variables = pd.read_csv(validate_path(self.args["variables"]))
+        gen = Bgen(self._select_file_on_chromosome())
+
+        # Isolate the IID to match against the variables IID
+        genetic_iid = [iid for fid, iid in gen.iid]
+
+        sorting = []
+        for index, iid in enumerate(variables["IID"].tolist()):
+            # If the IID is in the genetic file, note its position in the genetic file for sorting
+            if iid in genetic_iid:
+                sorting.append(genetic_iid.index(iid))
+            # Otherwise destroy this row
+            else:
+                variables.drop(index, axis=0, inplace=True)
+
+        # Sort the dataframe so that the order of the dataframe is the same as the genetic file
+        column_names = variables.columns
+        variables = variables.to_numpy()
+        variables = pd.DataFrame(variables[np.argsort(sorting)])
+        variables.columns = column_names
+
+        # Remove any IID in the genetic file that does not have variable information
+        variable_iid = variables["IID"].tolist()
+        gen = gen[[i for i, n in enumerate(genetic_iid) if n in variable_iid], :]
+        return gen, variables
+
     def _select_snps(self):
         """
         We may only want to run a subset of snps. If so, then this loads the snp indexes from a csv. Else, just return
@@ -65,34 +100,9 @@ class SrGwas:
         :rtype: list[snp]
         """
         if self.args["snps"]:
-            return CsvObject(validate_path(self.args["snps"]), set_columns=True)[0]
+            return CsvObject(validate_path(self.args["snps"]), set_columns=True, column_types=int)[0]
         else:
             return [i for i in range(self.gen.sid_count)]
-
-    def _set_seeks(self):
-        """
-        Exposure / external variables could be a vary large file, this allows us to index the expose file to the right
-        location
-
-        :return: A dict of {iid: seek}
-        :rtype dict
-        """
-
-        iid_seeker = {}
-        with open(self.variables, "rb") as file:
-
-            # Skip header
-            current_position = len(file.readline())
-
-            # Note each iid location within the file
-            for line_byte in file:
-                iid = line_byte.decode().strip('\r\n').split(",")[self.args["variable_iid_index"]]
-                iid_seeker[iid] = current_position
-                current_position += len(line_byte)
-
-            file.close()
-
-        return iid_seeker
 
     def set_snp_ids(self):
         # todo Set id when id's are not random such as from summary stats
