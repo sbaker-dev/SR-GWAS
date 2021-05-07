@@ -28,6 +28,11 @@ class SrGwas:
         # Isolate which snps are to be used
         self.snp_ids = self._select_snps()
 
+        # Set variable seek position on iid
+        self.variables = validate_path(self.args["variables"])
+        self.zipped = self.variables.suffix == ".gz"
+        self.iid_location = self._set_seeks()
+
         # Start the method that has been assigned if method has been set
         if self.args["method"]:
             getattr(self, self.args["method"])()
@@ -64,9 +69,35 @@ class SrGwas:
         else:
             return [i for i in range(self.gen.sid_count)]
 
+    def _set_seeks(self):
+        """
+        Exposure / external variables could be a vary large file, this allows us to index the expose file to the right
+        location
+
+        :return: A dict of {iid: seek}
+        :rtype dict
+        """
+
+        iid_seeker = {}
+        with open(self.variables, "rb") as file:
+
+            # Skip header
+            current_position = len(file.readline())
+
+            # Note each iid location within the file
+            for line_byte in file:
+                iid = line_byte.decode().strip('\r\n').split(",")[self.args["variable_iid_index"]]
+                iid_seeker[iid] = current_position
+                current_position += len(line_byte)
+
+            file.close()
+
+        return iid_seeker
+
     def set_snp_ids(self):
         # todo Set id when id's are not random such as from summary stats
         raise NotImplementedError("Not yet in place")
 
     def create_genetic_residuals(self):
         print("Hello")
+        print(self.gen.iid_count)
