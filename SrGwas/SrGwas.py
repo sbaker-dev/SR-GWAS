@@ -7,8 +7,6 @@ import pandas as pd
 import numpy as np
 import re
 
-import sys
-
 
 class SrGwas:
     def __init__(self, args):
@@ -26,6 +24,7 @@ class SrGwas:
 
         # Load the genetic reference, and sort both it and the external variables so they match on iid
         self.gen, self.variables = self._setup_variables()
+        self.formula = self._set_formula()
 
         # Set output file
         output = FileOut(validate_path(self.args["output_directory"]), self.args["output_name"], "csv")
@@ -90,6 +89,28 @@ class SrGwas:
         variable_iid = variables["IID"].tolist()
         gen = gen[[i for i, n in enumerate(genetic_iid) if n in variable_iid], :]
         return gen, variables
+
+    def _set_formula(self):
+        """
+        Set the stats model left hand side formula for this run
+
+        :return: The string formula for the left hand side of the equation
+        :rtype: str
+        """
+        # Validate each variable type
+        [self._validate_variable(cont, "Continuous") for cont in self.args["continuous_variables"]]
+        [self._validate_variable(cont, "Fixed_Effect") for cont in self.args["fixed_effect_variables"]]
+        [self._validate_variable(cont, "Cluster") for cont in self.args["cluster_variables"]]
+
+        # Join Each variable with a +
+        cont = "+".join([cont for cont in self.args["continuous_variables"]])
+        fe = "+".join([cont for cont in self.args["fixed_effect_variables"]])
+        cl = "+".join([cont for cont in self.args["cluster_variables"]])
+        return f"{cont}|{fe}|{cl}"
+
+    def _validate_variable(self, v, var_type):
+        """Check the variable exists within the columns"""
+        assert v in self.variables.columns, f"{var_type} variable {v} not in variables {self.variables.columns}"
 
     def _select_snps(self):
         """
