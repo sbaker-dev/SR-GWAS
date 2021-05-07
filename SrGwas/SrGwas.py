@@ -14,6 +14,7 @@ class SrGwas:
 
         # Load the args from the yaml file
         self.args = load_yaml(args)
+        self.residual_run = self.args["residuals"]
 
         # Set the gen file info
         self.gen_directory = self.args["path_to_gen_files"]
@@ -30,7 +31,10 @@ class SrGwas:
         # Set output file
         self.output = FileOut(validate_path(self.args["output_directory"]),
                               f"{self.args['output_name']}_Chr{self.target_chromosome}", "csv")
-        self.output.write_from_list(["Snp"] + [iid for fid, iid in self.gen.iid])
+        if self.residual_run:
+            self.output.write_from_list(["Snp"] + [iid for fid, iid in self.gen.iid])
+        else:
+            self.output.write_from_list(["Snp"] + ["coef", "std_err", "pvalue", "95%lower", "95%upper"])
 
         # Isolate which snps are to be used
         self.snp_ids = self._select_snps()
@@ -157,7 +161,13 @@ class SrGwas:
         # todo Set id when id's are not random such as from summary stats
         raise NotImplementedError("Not yet in place")
 
-    def create_genetic_residuals(self):
+    def gwas(self):
+        """
+        Create genetic residuals by regressing your covariant on the snp
+
+        :return: Nothing, write line to fine when residuals have been estimated
+        :rtype: None
+        """
 
         for index, snp_i in enumerate(self.snp_ids):
             if index % 1000 == 0:
@@ -176,10 +186,24 @@ class SrGwas:
             data = [pd.DataFrame(dosage), self.variables]
             df = pd.concat(data, axis=1)
 
-            # Run the estimation, hiding its output as its unnecessary (akin to quietly)
-            with suppress_stdout():
-                results = ols_high_d_category(df, formula=f"Dosage~{self.formula}")
-
-            # Extract the snp name and save the residuals
             snp_name = [self.gen.sid[snp_i].split(",")[1]]
-            self.output.write_from_list(snp_name + results.resid.astype("string").tolist())
+            if self.residual_run:
+                # Run the estimation, hiding its output as its unnecessary (akin to quietly)
+                with suppress_stdout():
+                    results = ols_high_d_category(df, formula=f"Dosage~{self.formula}")
+
+                # Extract the snp name and save the residuals
+                self.output.write_from_list(snp_name + results.resid.astype("string").tolist())
+
+            else:
+                with suppress_stdout():
+                    results = ols_high_d_category(df, formula=f"{self.phenotype}~Dosage+{self.formula}")
+
+                # Extract the regression results
+                regression_results = [
+                    results.params["Dosage"],
+                    results.bse["Dosage"],
+                    results.pvalues["Dosage"]] + results.conf_int().loc["Dosage"].tolist()
+                regression_results = [str(r) for r in regression_results]
+
+                self.output.write_from_list(snp_name + regression_results)
