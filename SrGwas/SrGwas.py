@@ -88,6 +88,11 @@ class SrGwas:
         # Remove any IID in the genetic file that does not have variable information
         variable_iid = variables["IID"].tolist()
         gen = gen[[i for i, n in enumerate(genetic_iid) if n in variable_iid], :]
+
+        for index, variable in enumerate(variables.columns):
+            if index != self.args["variable_iid_index"]:
+                variables[variable] = variables[variable].apply(pd.to_numeric)
+
         return gen, variables
 
     def _set_formula(self):
