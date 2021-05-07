@@ -86,7 +86,7 @@ if __name__ == '__main__':
     # residuals for N number of individuals. As a note, csv files are unlikely to be sufficient for storing this amount
     # of data, but we can use the plink / bgen IoStream byte code write/unpack logic if we generally need this amount
     # of data
-    file = ResOut(validate_path(output_directory), "Residuals")
+    file = ResOut(validate_path(output_directory), "ResidualsOVERIDE")
 
     # Construct IO stream to write out to and write the header of Snp + [IID1, IID2, ... IID(N)].
     # Bgen files store [variant id, rs_id], we just want the rs_id hence the [1]; see https://bit.ly/2J0C1kC
