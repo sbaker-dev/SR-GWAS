@@ -111,7 +111,24 @@ class SrGwas:
         cont = "+".join([cont for cont in self.args["continuous_variables"]])
         fe = "+".join([cont for cont in self.args["fixed_effect_variables"]])
         cl = "+".join([cont for cont in self.args["cluster_variables"]])
-        return f"{cont}|{fe}|{cl}"
+
+        if len(cont) == 0:
+            raise IndexError("No Variables provided to continuous_variables")
+
+        if len(self.args["fixed_effect_variables"]) == 0 and len(self.args["cluster_variables"]) == 0:
+            return cont
+
+        elif len(self.args["fixed_effect_variables"]) > 0 and len(self.args["cluster_variables"]) == 0:
+            return f"{cont}|{fe}"
+
+        elif len(self.args["fixed_effect_variables"]) > 0 and len(self.args["cluster_variables"]) > 0:
+            return f"{cont}|{fe}|{cl}"
+
+        elif len(self.args["fixed_effect_variables"]) == 0 and len(self.args["cluster_variables"]) > 0:
+            raise IndexError("Invalid formula, clustering can only be undertaken when FE specified.")
+
+        else:
+            raise IndexError(f"Unknown formula specification of lengths {len(cont)}, {len(fe)}, {len(cl)}")
 
     def _validate_variable(self, v, var_type):
         """Check the variable exists within the columns"""
