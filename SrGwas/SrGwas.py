@@ -1,4 +1,4 @@
-from miscSupports import validate_path, directory_iterator
+from miscSupports import validate_path, directory_iterator, load_yaml
 from bgen_reader import custom_meta_path
 from pysnptools.distreader import Bgen
 from pathlib import Path
@@ -6,15 +6,17 @@ import re
 
 
 class SrGwas:
-    def __init__(self, gen_directory, gen_type, target_chromosome, write_dir, memory_path):
+    def __init__(self, args):
+
+        self.args = load_yaml(args)
 
         # Set the gen file info
-        self.gen_directory = gen_directory
-        self.gen_type = gen_type
-        self.target_chromosome = target_chromosome
+        self.gen_directory = self.args["path_to_gen_files"]
+        self.gen_type = self.args["gen_type"]
+        self.target_chromosome = self.args["target_chromosome"]
 
         # Set the output path for the memory files
-        custom_meta_path(validate_path(memory_path))
+        custom_meta_path(validate_path(self.args["memory_file_location"]))
 
         self.gen_file = Bgen(self._select_file_on_chromosome())
 
