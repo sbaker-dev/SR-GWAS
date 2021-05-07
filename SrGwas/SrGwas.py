@@ -1,4 +1,5 @@
-from miscSupports import validate_path, directory_iterator, load_yaml, FileOut
+from miscSupports import validate_path, directory_iterator, load_yaml, FileOut, suppress_stdout
+from FixedEffectModel.api import ols_high_d_category
 from bgen_reader import custom_meta_path
 from pysnptools.distreader import Bgen
 from csvObject import CsvObject
@@ -27,8 +28,9 @@ class SrGwas:
         self.formula = self._set_formula()
 
         # Set output file
-        output = FileOut(validate_path(self.args["output_directory"]), self.args["output_name"], "csv")
-        output.write_from_list(["Snp"] + [iid for fid, iid in self.gen.iid])
+        self.output = FileOut(validate_path(self.args["output_directory"]),
+                              f"{self.args['output_name']}_Chr{self.target_chromosome}", "csv")
+        self.output.write_from_list(["Snp"] + [iid for fid, iid in self.gen.iid])
 
         # Isolate which snps are to be used
         self.snp_ids = self._select_snps()
@@ -152,5 +154,28 @@ class SrGwas:
         raise NotImplementedError("Not yet in place")
 
     def create_genetic_residuals(self):
-        print("Hello")
-        print(self.gen.iid_count)
+
+        for index, snp_i in enumerate(self.snp_ids):
+            if index % 1000 == 0:
+                print(f"{index} / {len(self.snp_ids)}")
+
+            # Instance the memory for all individuals (:) for snp i
+            current_snp = self.gen[:, snp_i]
+
+            # Transform bgen dosage of [0, 1, 0] -> 0, 1, or 2 respectively.
+            dosage = sum(np.array([snp * i for i, snp in enumerate(current_snp.read(dtype=np.int8).val.T)],
+                                  dtype=np.int8))[0]
+
+            # Combine the dataset for regression
+            dosage = pd.DataFrame(dosage)
+            dosage.columns = ["Dosage"]
+            data = [pd.DataFrame(dosage), self.variables]
+            df = pd.concat(data, axis=1)
+
+            # Run the estimation, hiding its output as its unnecessary (akin to quietly)
+            with suppress_stdout():
+                results = ols_high_d_category(df, formula=f"Dosage~{self.formula}")
+
+            # Extract the snp name and save the residuals
+            snp_name = [self.gen.sid[snp_i].split(",")[1]]
+            self.output.write_from_list(snp_name + results.resid.astype("string").tolist())
