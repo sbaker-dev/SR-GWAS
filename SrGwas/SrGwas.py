@@ -24,8 +24,8 @@ class SrGwas:
         custom_meta_path(validate_path(self.args["memory_file_location"]))
 
         # Load the genetic reference, and sort both it and the external variables so they match on iid
-        self.gen, self.variables = self._setup_variables()
-        self.formula = self._set_formula()
+        self.gen, self.variables,  = self._setup_variables()
+        self.formula, self.phenotype = self._set_formula()
 
         # Set output file
         self.output = FileOut(validate_path(self.args["output_directory"]),
@@ -102,12 +102,16 @@ class SrGwas:
         Set the stats model left hand side formula for this run
 
         :return: The string formula for the left hand side of the equation
-        :rtype: str
+        :rtype: (str, str)
         """
         # Validate each variable type
         [self._validate_variable(cont, "Continuous") for cont in self.args["continuous_variables"]]
         [self._validate_variable(cont, "Fixed_Effect") for cont in self.args["fixed_effect_variables"]]
         [self._validate_variable(cont, "Cluster") for cont in self.args["cluster_variables"]]
+
+        # Validate the phenotype if set (won't necessarily need it for residual runs)
+        if self.args["phenotype"]:
+            self._validate_variable(self.args["phenotype"], "Phenotype")
 
         # Join Each variable with a +
         cont = "+".join([cont for cont in self.args["continuous_variables"]])
@@ -118,13 +122,13 @@ class SrGwas:
             raise IndexError("No Variables provided to continuous_variables")
 
         if len(self.args["fixed_effect_variables"]) == 0 and len(self.args["cluster_variables"]) == 0:
-            return cont
+            return cont, self.args["phenotype"]
 
         elif len(self.args["fixed_effect_variables"]) > 0 and len(self.args["cluster_variables"]) == 0:
-            return f"{cont}|{fe}"
+            return f"{cont}|{fe}", self.args["phenotype"]
 
         elif len(self.args["fixed_effect_variables"]) > 0 and len(self.args["cluster_variables"]) > 0:
-            return f"{cont}|{fe}|{cl}"
+            return f"{cont}|{fe}|{cl}", self.args["phenotype"]
 
         elif len(self.args["fixed_effect_variables"]) == 0 and len(self.args["cluster_variables"]) > 0:
             raise IndexError("Invalid formula, clustering can only be undertaken when FE specified.")
