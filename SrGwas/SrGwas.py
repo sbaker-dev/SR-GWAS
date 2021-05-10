@@ -32,7 +32,8 @@ class SrGwas:
         # Load the genetic reference, and sort both it and the external variables so they match on iid
         self.gen, self.variables = self._setup_variables()
         self.formula, self.phenotype = self._set_formula()
-        self.logger.write(f"Set {self.gen.iid_count} in Genetic file and {len(self.variables)} in variable file.")
+        self.logger.write(f"Set {self.gen.iid_count} in Genetic file and {len(self.variables)} in variable file. For"
+                          f"{self.formula}")
 
         # Set output file
         self.output = FileOut(validate_path(self.write_dir), self.file_name, "csv")
@@ -45,6 +46,8 @@ class SrGwas:
         # Start the method that has been assigned if method has been set
         if self.args["method"]:
             getattr(self, self.args["method"])()
+
+        self.logger.write(f"Finished predefined {terminal_time()}")
 
     def __repr__(self):
         return f"SrGwas object Controller"
@@ -187,6 +190,9 @@ class SrGwas:
                             f"If you want to run a GWAS with all snps, simply set snps: null and ignore this method")
 
         write_csv(self.write_dir, f"{self.file_name}_Snps", ["Snp"], snp_list)
+        # todo Add a 'print' attribute to FileReader which defaults to false but can be set to true
+        self.logger.write(f"Constructed snp id list {terminal_time()}")
+        print(f"Construct snp Id list {terminal_time()}")
 
     def gwas(self):
         """
