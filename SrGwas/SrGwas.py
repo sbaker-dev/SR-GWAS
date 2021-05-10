@@ -41,7 +41,7 @@ class SrGwas:
         if self.residual_run:
             self.output.write_from_list(["Snp"] + [iid for fid, iid in self.gen.iid])
         else:
-            self.output.write_from_list(["Snp"] + ["coef", "std_err", "pvalue", "95%lower", "95%upper"])
+            self.output.write_from_list(["Snp"] + ["coef", "std_err", "pvalue", "obs", "95%lower", "95%upper"])
 
         # Start the method that has been assigned if method has been set
         if self.args["method"]:
@@ -206,10 +206,10 @@ class SrGwas:
         # Isolate which snps are to be used
         snp_ids = self._select_snps()
 
+        # todo This can probably be speed up by instancing the snps into memory blocks similar to filtering in pyGenicPipeline
         for index, snp_i in enumerate(snp_ids):
-            if index % 1000 == 0:
-                print(f"{index} / {len(snp_ids)}")
-                self.logger.write(f"{index} / {len(snp_ids)}")
+            print(f"{index} / {len(snp_ids)}")
+            self.logger.write(f"{index} / {len(snp_ids)}")
 
             # Instance the memory for all individuals (:) for snp i
             current_snp = self.gen[:, snp_i]
@@ -241,7 +241,9 @@ class SrGwas:
                 regression_results = [
                     results.params["Dosage"],
                     results.bse["Dosage"],
-                    results.pvalues["Dosage"]] + results.conf_int().loc["Dosage"].tolist()
+                    results.pvalues["Dosage"],
+                    results.nobs] + results.conf_int().loc["Dosage"].tolist()
                 regression_results = [str(r) for r in regression_results]
 
                 self.output.write_from_list(snp_name + regression_results)
+
