@@ -31,7 +31,7 @@ class SrGwas:
         self.logger.write(f"Setup {terminal_time()}")
 
         # Load the genetic reference, and sort both it and the external variables so they match on iid
-        self.gen, self.variables,  = self._setup_variables()
+        self.gen, self.variables = self._setup_variables()
         self.formula, self.phenotype = self._set_formula()
 
         # Set output file
@@ -80,7 +80,7 @@ class SrGwas:
         """
 
         # Load the variables as pandas dataframe and setup the reference genetic file for this chromosome
-        variables = pd.read_csv(validate_path(self.args["variables"]))[::-1]
+        variables = pd.read_csv(validate_path(self.args["variables"]))
         gen = Bgen(self._select_file_on_chromosome())
         self.logger.write(f"...Loaded external variables {terminal_time()}")
 
