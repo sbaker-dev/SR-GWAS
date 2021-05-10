@@ -1,8 +1,9 @@
 from miscSupports import validate_path, directory_iterator, load_yaml, FileOut, suppress_stdout, terminal_time
 from FixedEffectModel.api import ols_high_d_category
+from csvObject import CsvObject, write_csv
 from bgen_reader import custom_meta_path
 from pysnptools.distreader import Bgen
-from csvObject import CsvObject
+from random import sample
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -15,19 +16,17 @@ class SrGwas:
         # Load the args from the yaml file
         self.args = load_yaml(args)
         self.residual_run = self.args["residuals"]
-
-        print(self.args)
+        self.write_dir = self.args["output_directory"]
 
         # Set the gen file info
         self.gen_directory = self.args["path_to_gen_files"]
         self.gen_type = self.args["gen_type"]
         self.target_chromosome = self.args["target_chromosome"]
+        self.file_name = f"{self.args['output_name']}_Chr{self.target_chromosome}"
 
         # Set the output path for the memory files and load the file reference
         custom_meta_path(validate_path(self.args["memory_file_location"]))
-        self.logger = FileOut(self.args["output_directory"], f"{self.args['output_name']}_{self.target_chromosome}",
-                              "log")
-
+        self.logger = FileOut(self.write_dir, self.file_name, "log")
         self.logger.write(f"Setup {terminal_time()}")
 
         # Load the genetic reference, and sort both it and the external variables so they match on iid
@@ -36,8 +35,8 @@ class SrGwas:
         self.logger.write(f"Set {self.gen.iid_count} in Genetic file and {len(self.variables)} in variable file.")
 
         # Set output file
-        self.output = FileOut(validate_path(self.args["output_directory"]),
-                              f"{self.args['output_name']}_Chr{self.target_chromosome}", "csv")
+        self.output = FileOut(validate_path(self.write_dir), self.file_name, "csv")
+
         if self.residual_run:
             self.output.write_from_list(["Snp"] + [iid for fid, iid in self.gen.iid])
         else:
@@ -166,7 +165,28 @@ class SrGwas:
             return [i for i in range(self.gen.sid_count)]
 
     def set_snp_ids(self):
-        print(self.gen.sid_count)
+        """
+        Isolate a subset of snps based on pre-defined named snps in a csv, passed as a str to snps_to_id, or a random
+        set of snps of total == pre-defined int, where the int is set to snps_to_id.
+
+        :return: Nothing, write the id's to a csv then stop
+        :rtype: None
+        :raise TypeError: If a str/ int is not passed
+        """
+
+        if isinstance(self.args["snps_to_id"], str):
+            snps = CsvObject(validate_path(self.args["snps_to_id"]), set_columns=True)[0]
+            snp_list = [f"{snp},{snp}" for snp in snps]
+            snp_list = self.gen.sid_to_index(snp_list).tolist()
+
+        elif isinstance(self.args["snps_to_id"], int):
+            snp_list = sample(range(self.gen.sid_count), self.args["snps_to_id"])
+
+        else:
+            raise TypeError(f"set_snp_ids expects an int or a str yet was passed {type(self.args['snps_to_id'])}\n"
+                            f"If you want to run a GWAS with all snps, simply set snps: null and ignore this method")
+
+        write_csv(self.write_dir, f"{self.file_name}_Snps", ["Snp"], snp_list)
 
     def gwas(self):
         """
