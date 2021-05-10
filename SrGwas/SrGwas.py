@@ -33,6 +33,7 @@ class SrGwas:
         # Load the genetic reference, and sort both it and the external variables so they match on iid
         self.gen, self.variables = self._setup_variables()
         self.formula, self.phenotype = self._set_formula()
+        self.logger.write(f"Set {self.gen.iid_count} in Genetic file and {len(self.variables)} in variable file.")
 
         # Set output file
         self.output = FileOut(validate_path(self.args["output_directory"]),
@@ -41,9 +42,6 @@ class SrGwas:
             self.output.write_from_list(["Snp"] + [iid for fid, iid in self.gen.iid])
         else:
             self.output.write_from_list(["Snp"] + ["coef", "std_err", "pvalue", "95%lower", "95%upper"])
-
-        # Isolate which snps are to be used
-        self.snp_ids = self._select_snps()
 
         # Start the method that has been assigned if method has been set
         if self.args["method"]:
@@ -179,11 +177,13 @@ class SrGwas:
         :return: Nothing, write line to fine when residuals have been estimated
         :rtype: None
         """
+        # Isolate which snps are to be used
+        snp_ids = self._select_snps()
 
-        for index, snp_i in enumerate(self.snp_ids):
+        for index, snp_i in enumerate(snp_ids):
             if index % 1000 == 0:
-                print(f"{index} / {len(self.snp_ids)}")
-                self.logger.write(f"{index} / {len(self.snp_ids)}")
+                print(f"{index} / {len(snp_ids)}")
+                self.logger.write(f"{index} / {len(snp_ids)}")
 
             # Instance the memory for all individuals (:) for snp i
             current_snp = self.gen[:, snp_i]
