@@ -1,4 +1,4 @@
-from miscSupports import validate_path, directory_iterator, load_yaml, FileOut, suppress_stdout
+from miscSupports import validate_path, directory_iterator, load_yaml, FileOut, suppress_stdout, terminal_time
 from FixedEffectModel.api import ols_high_d_category
 from bgen_reader import custom_meta_path
 from pysnptools.distreader import Bgen
@@ -16,6 +16,8 @@ class SrGwas:
         self.args = load_yaml(args)
         self.residual_run = self.args["residuals"]
 
+        print(self.args)
+
         # Set the gen file info
         self.gen_directory = self.args["path_to_gen_files"]
         self.gen_type = self.args["gen_type"]
@@ -23,6 +25,10 @@ class SrGwas:
 
         # Set the output path for the memory files and load the file reference
         custom_meta_path(validate_path(self.args["memory_file_location"]))
+        self.logger = FileOut(self.args["output_directory"], f"{self.args['output_name']}_{self.target_chromosome}",
+                              "log")
+
+        self.logger.write(f"Setup {terminal_time()}")
 
         # Load the genetic reference, and sort both it and the external variables so they match on iid
         self.gen, self.variables,  = self._setup_variables()
@@ -42,6 +48,9 @@ class SrGwas:
         # Start the method that has been assigned if method has been set
         if self.args["method"]:
             getattr(self, self.args["method"])()
+
+    def __repr__(self):
+        return f"SrGwas object Controller"
 
     def _select_file_on_chromosome(self):
         """
@@ -69,36 +78,37 @@ class SrGwas:
         :return: Bgenfile for this chromosome as well as a pandas dataframe of the external variables
         :rtype: (Bgen, pd.DataFrame)
         """
+
         # Load the variables as pandas dataframe and setup the reference genetic file for this chromosome
-        variables = pd.read_csv(validate_path(self.args["variables"]))
+        variables = pd.read_csv(validate_path(self.args["variables"]))[::-1]
         gen = Bgen(self._select_file_on_chromosome())
+        self.logger.write(f"...Loaded external variables {terminal_time()}")
 
-        # Isolate the IID to match against the variables IID
-        genetic_iid = [iid for fid, iid in gen.iid]
+        # Recast IID as an int
+        variables["IID"] = [int(re.sub(r'[\D]', "", iid)) for iid in variables["IID"].tolist()]
 
-        sorting = []
-        for index, iid in enumerate(variables["IID"].tolist()):
-            # If the IID is in the genetic file, note its position in the genetic file for sorting
-            if iid in genetic_iid:
-                sorting.append(genetic_iid.index(iid))
-            # Otherwise destroy this row
-            else:
-                variables.drop(index, axis=0, inplace=True)
+        # Isolate the IID to match against the variables IID and create the reference
+        genetic_iid = np.array([int(re.sub(r'[\D]', "", iid)) for fid, iid in gen.iid])
+        genetic_position = gen.iid
 
-        # Sort the dataframe so that the order of the dataframe is the same as the genetic file
-        column_names = variables.columns
-        variables = variables.to_numpy()
-        variables = pd.DataFrame(variables[np.argsort(sorting)])
-        variables.columns = column_names
+        # Remove any IID that is in the external data array but not in the genetic array
+        out = np.in1d(variables["IID"].to_numpy(), genetic_iid)
+        variables = variables[out]
 
-        # Remove any IID in the genetic file that does not have variable information
-        variable_iid = variables["IID"].tolist()
-        gen = gen[[i for i, n in enumerate(genetic_iid) if n in variable_iid], :]
+        # Remove any IID that is in the genetic array but not in the external data
+        out = np.in1d(genetic_iid, variables["IID"].to_numpy())
+        genetic_iid = genetic_iid[out]
+        genetic_position = genetic_position[out]
+
+        # Sort both arrays to be in the same order
+        variables = variables.sort_values(by=['IID'], ascending=True)
+        gen = gen[gen.iid_to_index(genetic_position[np.argsort(genetic_iid)]), :]
 
         for index, variable in enumerate(variables.columns):
             if index != self.args["variable_iid_index"]:
                 variables[variable] = variables[variable].apply(pd.to_numeric)
 
+        self.logger.write(f"Setup external reference {terminal_time()}")
         return gen, variables
 
     def _set_formula(self):
@@ -158,12 +168,13 @@ class SrGwas:
             return [i for i in range(self.gen.sid_count)]
 
     def set_snp_ids(self):
-        # todo Set id when id's are not random such as from summary stats
-        raise NotImplementedError("Not yet in place")
+        print(self.gen.sid_count)
 
     def gwas(self):
         """
-        Create genetic residuals by regressing your covariant on the snp
+        Create genetic residuals by regressing your covariant on the snp or run a more traditional gwas of
+
+        phenotype ~ dosage + covariant_1 + ... covariant_N
 
         :return: Nothing, write line to fine when residuals have been estimated
         :rtype: None
@@ -172,6 +183,7 @@ class SrGwas:
         for index, snp_i in enumerate(self.snp_ids):
             if index % 1000 == 0:
                 print(f"{index} / {len(self.snp_ids)}")
+                self.logger.write(f"{index} / {len(self.snp_ids)}")
 
             # Instance the memory for all individuals (:) for snp i
             current_snp = self.gen[:, snp_i]
