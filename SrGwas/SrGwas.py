@@ -1,9 +1,9 @@
-from miscSupports import validate_path, directory_iterator, load_yaml, FileOut, suppress_stdout, terminal_time
-from FixedEffectModel.api import ols_high_d_category
+from miscSupports import validate_path, directory_iterator, load_yaml, FileOut, terminal_time
 from csvObject import CsvObject, write_csv
 from bgen_reader import custom_meta_path
 from pysnptools.distreader import Bgen
 from random import sample
+from kdaHDFE import HDFE, demean, formula_transform, cal_df
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -30,10 +30,12 @@ class SrGwas:
         self.logger.write(f"Setup {terminal_time()}")
 
         # Load the genetic reference, and sort both it and the external variables so they match on iid
-        self.gen, self.variables = self._setup_variables()
-        self.formula, self.phenotype = self._set_formula()
-        self.logger.write(f"Set {self.gen.iid_count} in Genetic file and {len(self.variables)} in variable file. For"
-                          f"{self.formula}")
+        (self.phenotype, self.covariant, self.fixed_effects, self.clusters), self.formula = self._set_formula()
+        self.gen, self.df, self.phenotype = self._setup_variables()
+        self.logger.write(f"Set {self.gen.iid_count} in Genetic file and {len(self.df)} in variable file")
+
+        self.total_obs = len(self.df)
+        self.rank = cal_df(self.df, self.fixed_effects)
 
         # Set output file
         self.output = FileOut(validate_path(self.write_dir), self.file_name, "csv")
@@ -52,6 +54,80 @@ class SrGwas:
 
     def __repr__(self):
         return f"SrGwas object Controller"
+
+    def _set_formula(self):
+        """
+        Set the stats model left hand side formula for this run
+
+        :return: The string formula for the left hand side of the equation
+        :rtype: (list[str], list[str], list[str], list[str]), str
+        """
+        # Join Each variable with a +
+        cont = "+".join([cont for cont in self.args["continuous_variables"]])
+        fe = "+".join([cont for cont in self.args["fixed_effect_variables"]])
+        cl = "+".join([cont for cont in self.args["cluster_variables"]])
+
+        rhs = f"{cont}|{fe}|{cl}"
+
+        if self.args["phenotype"]:
+            return formula_transform(f"{self.args['phenotype']}~{rhs}"), rhs
+        else:
+            _, covariant, fixed_effects, clusters = formula_transform(f"null~{rhs}")
+            return [], covariant, fixed_effects, clusters, rhs
+
+    def _setup_variables(self):
+        """
+        The order of IID in genetic file may not equal to submission, this sorts the arrays to be equivalent.
+
+        :return: Bgenfile for this chromosome as well as a pandas dataframe of the external variables
+        """
+
+        # Load the variables as pandas dataframe and setup the reference genetic file for this chromosome
+        df = pd.read_csv(validate_path(self.args["variables"]))
+        gen = Bgen(self._select_file_on_chromosome())
+        self.logger.write(f"...Loaded external variables {terminal_time()}")
+
+        # Validate that the variables we have set in the formula exist in the DataFrame
+        [self._validate_variable(df, cont, "Continuous") for cont in self.covariant]
+        [self._validate_variable(df, cont, "Fixed_Effect") for cont in self.fixed_effects]
+        [self._validate_variable(df, cont, "Cluster") for cont in self.clusters]
+        if not self.residual_run:
+            assert self.args["phenotype"], "GWAS requires a phenotype"
+
+        # Recast IID as an int
+        df["IID"] = [int(re.sub(r'[\D]', "", str(iid))) for iid in df["IID"].tolist()]
+
+        # Isolate the IID to match against the variables IID and create the reference
+        genetic_iid = np.array([int(re.sub(r'[\D]', "", iid)) for fid, iid in gen.iid])
+        genetic_position = gen.iid
+
+        # Remove any IID that is in the external data array but not in the genetic array
+        out = np.in1d(df["IID"].to_numpy(), genetic_iid)
+        df = df[out]
+
+        # Remove any IID that is in the genetic array but not in the external data
+        out = np.in1d(genetic_iid, df["IID"].to_numpy())
+        genetic_iid = genetic_iid[out]
+        genetic_position = genetic_position[out]
+
+        # Sort both arrays to be in the same order
+        df = df.sort_values(by=['IID'], ascending=True)
+        gen = gen[gen.iid_to_index(genetic_position[np.argsort(genetic_iid)]), :]
+
+        for index, v in enumerate(df.columns):
+            if index != self.args["variable_iid_index"]:
+                df[v] = df[v].apply(pd.to_numeric)
+
+        # Demean the data
+        variables = demean(self.phenotype + self.covariant, df, self.fixed_effects, len(df))
+        self.logger.write(f"Setup external reference {terminal_time()}")
+
+        # Add a reference column for Dosage
+        variables["Dosage"] = [np.NaN for _ in range(len(variables))]
+
+        # Remove non used data to save memory
+        return gen, variables[self.phenotype + self.covariant + self.fixed_effects + self.clusters + ["Dosage"]], \
+            self.phenotype[0]
 
     def _select_file_on_chromosome(self):
         """
@@ -72,88 +148,10 @@ class SrGwas:
 
         raise IndexError(f"Failed to find any relevant file for {self.target_chromosome} in {self.gen_directory}")
 
-    def _setup_variables(self):
-        """
-        The order of IID in genetic file may not equal to submission, this sorts the arrays to be equivalent.
-
-        :return: Bgenfile for this chromosome as well as a pandas dataframe of the external variables
-        :rtype: (Bgen, pd.DataFrame)
-        """
-
-        # Load the variables as pandas dataframe and setup the reference genetic file for this chromosome
-        variables = pd.read_csv(validate_path(self.args["variables"]))
-        gen = Bgen(self._select_file_on_chromosome())
-        self.logger.write(f"...Loaded external variables {terminal_time()}")
-
-        # Recast IID as an int
-        variables["IID"] = [int(re.sub(r'[\D]', "", iid)) for iid in variables["IID"].tolist()]
-
-        # Isolate the IID to match against the variables IID and create the reference
-        genetic_iid = np.array([int(re.sub(r'[\D]', "", iid)) for fid, iid in gen.iid])
-        genetic_position = gen.iid
-
-        # Remove any IID that is in the external data array but not in the genetic array
-        out = np.in1d(variables["IID"].to_numpy(), genetic_iid)
-        variables = variables[out]
-
-        # Remove any IID that is in the genetic array but not in the external data
-        out = np.in1d(genetic_iid, variables["IID"].to_numpy())
-        genetic_iid = genetic_iid[out]
-        genetic_position = genetic_position[out]
-
-        # Sort both arrays to be in the same order
-        variables = variables.sort_values(by=['IID'], ascending=True)
-        gen = gen[gen.iid_to_index(genetic_position[np.argsort(genetic_iid)]), :]
-
-        for index, variable in enumerate(variables.columns):
-            if index != self.args["variable_iid_index"]:
-                variables[variable] = variables[variable].apply(pd.to_numeric)
-
-        self.logger.write(f"Setup external reference {terminal_time()}")
-        return gen, variables
-
-    def _set_formula(self):
-        """
-        Set the stats model left hand side formula for this run
-
-        :return: The string formula for the left hand side of the equation
-        :rtype: (str, str)
-        """
-        # Validate each variable type
-        [self._validate_variable(cont, "Continuous") for cont in self.args["continuous_variables"]]
-        [self._validate_variable(cont, "Fixed_Effect") for cont in self.args["fixed_effect_variables"]]
-        [self._validate_variable(cont, "Cluster") for cont in self.args["cluster_variables"]]
-
-        # Validate the phenotype if set (won't necessarily need it for residual runs)
-        if self.args["phenotype"]:
-            self._validate_variable(self.args["phenotype"], "Phenotype")
-
-        # Join Each variable with a +
-        cont = "+".join([cont for cont in self.args["continuous_variables"]])
-        fe = "+".join([cont for cont in self.args["fixed_effect_variables"]])
-        cl = "+".join([cont for cont in self.args["cluster_variables"]])
-
-        if len(cont) == 0:
-            raise IndexError("No Variables provided to continuous_variables")
-
-        if len(self.args["fixed_effect_variables"]) == 0 and len(self.args["cluster_variables"]) == 0:
-            return cont, self.args["phenotype"]
-
-        elif len(self.args["fixed_effect_variables"]) > 0 and len(self.args["cluster_variables"]) == 0:
-            return f"{cont}|{fe}", self.args["phenotype"]
-
-        elif len(self.args["fixed_effect_variables"]) > 0 and len(self.args["cluster_variables"]) > 0:
-            return f"{cont}|{fe}|{cl}", self.args["phenotype"]
-
-        elif len(self.args["fixed_effect_variables"]) == 0 and len(self.args["cluster_variables"]) > 0:
-            raise IndexError("Invalid formula, clustering can only be undertaken when FE specified.")
-
-        else:
-            raise IndexError(f"Unknown formula specification of lengths {len(cont)}, {len(fe)}, {len(cl)}")
-
-    def _validate_variable(self, v, var_type):
+    @staticmethod
+    def _validate_variable(variables, v, var_type):
         """Check the variable exists within the columns"""
-        assert v in self.variables.columns, f"{var_type} variable {v} not in variables {self.variables.columns}"
+        assert v in variables.columns, f"{var_type} variable {v} not in variables {variables.columns}"
 
     def _select_snps(self):
         """
@@ -207,7 +205,8 @@ class SrGwas:
 
         # todo This can probably be speed up by instancing the snps into memory blocks similar to filtering in pyGenicPipeline
         for index, snp_i in enumerate(snp_ids):
-            self.logger.write(f"{index} / {len(snp_ids)}")
+            if index % 100 == 0:
+                self.logger.write(f"{index} / {len(snp_ids)}")
 
             # Instance the memory for all individuals (:) for snp i
             current_snp = self.gen[:, snp_i]
@@ -216,34 +215,17 @@ class SrGwas:
             dosage = sum(np.array([snp * i for i, snp in enumerate(current_snp.read(dtype=np.int8).val.T)],
                                   dtype=np.int8))[0]
 
-            # Combine the dataset for regression
-            dosage = pd.DataFrame(dosage)
-            dosage.columns = ["Dosage"]
-            data = [pd.DataFrame(dosage), self.variables]
-            df = pd.concat(data, axis=1)
+            self.df["Dosage"] = dosage
+            demeaned = demean(["Dosage"], self.df, self.fixed_effects, self.total_obs)
 
             snp_name = [self.gen.sid[snp_i].split(",")[1]]
             if self.residual_run:
                 # Run the estimation, hiding its output as its unnecessary (akin to quietly)
-                with suppress_stdout():
-                    results = ols_high_d_category(df, formula=f"Dosage~{self.formula}")
+                results = HDFE(demeaned, formula=f"Dosage~{self.formula}").reg_hdfe(self.rank)
 
                 # Extract the snp name and save the residuals
                 self.output.write_from_list(snp_name + results.resid.astype("string").tolist())
 
             else:
-                with suppress_stdout():
-                    results = ols_high_d_category(df, formula=f"{self.phenotype}~Dosage+{self.formula}")
-
-                # Extract the regression results
-                regression_results = [
-                    results.params["Dosage"],
-                    results.bse["Dosage"],
-                    results.pvalues["Dosage"],
-                    results.nobs] + results.conf_int().loc["Dosage"].tolist()
-
-                # todo File should be able to to take non string results now
-                regression_results = [str(r) for r in regression_results]
-
-                self.output.write_from_list(snp_name + regression_results)
-
+                results = HDFE(demeaned, formula=f"{self.phenotype}~Dosage+{self.formula}").reg_hdfe(self.rank)
+                self.output.write_from_list(snp_name + results.results_out("Dosage")[0])
