@@ -26,7 +26,7 @@ class SrGwas:
 
         # Set the output path for the memory files and load the file reference
         custom_meta_path(validate_path(self.args["memory_file_location"]))
-        self.logger = FileOut(self.write_dir, self.file_name, "log")
+        self.logger = FileOut(self.write_dir, self.file_name, "log", True)
         self.logger.write(f"Setup {terminal_time()}")
 
         # Load the genetic reference, and sort both it and the external variables so they match on iid
@@ -47,6 +47,7 @@ class SrGwas:
         if self.args["method"]:
             getattr(self, self.args["method"])()
 
+        self.logger.print_out = True
         self.logger.write(f"Finished predefined {terminal_time()}")
 
     def __repr__(self):
@@ -190,9 +191,7 @@ class SrGwas:
                             f"If you want to run a GWAS with all snps, simply set snps: null and ignore this method")
 
         write_csv(self.write_dir, f"{self.file_name}_Snps", ["Snp"], snp_list)
-        # todo Add a 'print' attribute to FileReader which defaults to false but can be set to true
         self.logger.write(f"Constructed snp id list {terminal_time()}")
-        print(f"Construct snp Id list {terminal_time()}")
 
     def gwas(self):
         """
@@ -208,7 +207,6 @@ class SrGwas:
 
         # todo This can probably be speed up by instancing the snps into memory blocks similar to filtering in pyGenicPipeline
         for index, snp_i in enumerate(snp_ids):
-            print(f"{index} / {len(snp_ids)}")
             self.logger.write(f"{index} / {len(snp_ids)}")
 
             # Instance the memory for all individuals (:) for snp i
@@ -243,6 +241,8 @@ class SrGwas:
                     results.bse["Dosage"],
                     results.pvalues["Dosage"],
                     results.nobs] + results.conf_int().loc["Dosage"].tolist()
+
+                # todo File should be able to to take non string results now
                 regression_results = [str(r) for r in regression_results]
 
                 self.output.write_from_list(snp_name + regression_results)
