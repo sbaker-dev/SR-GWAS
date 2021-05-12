@@ -1,9 +1,9 @@
-from miscSupports import validate_path, directory_iterator, load_yaml, FileOut, terminal_time
+from miscSupports import validate_path, directory_iterator, load_yaml, FileOut, terminal_time, chunk_list
+from kdaHDFE import HDFE, demean, formula_transform, cal_df
 from csvObject import CsvObject, write_csv
 from bgen_reader import custom_meta_path
 from pysnptools.distreader import Bgen
 from random import sample
-from kdaHDFE import HDFE, demean, formula_transform, cal_df
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -36,6 +36,7 @@ class SrGwas:
 
         self.total_obs = len(self.df)
         self.rank = cal_df(self.df, self.fixed_effects)
+        self.iter_size = self.args["array_size"]
 
         # Set output file
         self.output = FileOut(validate_path(self.write_dir), self.file_name, "csv")
@@ -122,11 +123,8 @@ class SrGwas:
         variables = demean(self.phenotype + self.covariant, df, self.fixed_effects, len(df))
         self.logger.write(f"Setup external reference {terminal_time()}")
 
-        # Add a reference column for Dosage
-        variables["Dosage"] = [np.NaN for _ in range(len(variables))]
-
         # Remove non used data to save memory
-        return gen, variables[self.phenotype + self.covariant + self.fixed_effects + self.clusters + ["Dosage"]], \
+        return gen, variables[self.phenotype + self.covariant + self.fixed_effects + self.clusters], \
             self.phenotype[0]
 
     def _select_file_on_chromosome(self):
@@ -203,29 +201,37 @@ class SrGwas:
         # Isolate which snps are to be used
         snp_ids = self._select_snps()
 
-        # todo This can probably be speed up by instancing the snps into memory blocks similar to filtering in pyGenicPipeline
-        for index, snp_i in enumerate(snp_ids):
-            if index % 100 == 0:
-                self.logger.write(f"{index} / {len(snp_ids)}")
+        snp_chunk_list = chunk_list(snp_ids, self.iter_size)
+
+        for chunk_id, snp_chunk in enumerate(snp_chunk_list, 1):
+            self.logger.write(f"Chunk {chunk_id} of {len(snp_chunk_list)}")
 
             # Instance the memory for all individuals (:) for snp i
-            current_snp = self.gen[:, snp_i]
+            current_snps = self.gen[:, snp_chunk]
 
             # Transform bgen dosage of [0, 1, 0] -> 0, 1, or 2 respectively.
-            dosage = sum(np.array([snp * i for i, snp in enumerate(current_snp.read(dtype=np.int8).val.T)],
-                                  dtype=np.int8))[0]
+            dosage = sum(np.array([snp * i for i, snp in enumerate(current_snps.read(dtype=np.int8).val.T)],
+                                  dtype=np.int8))
 
-            self.df["Dosage"] = dosage
-            demeaned = demean(["Dosage"], self.df, self.fixed_effects, self.total_obs)
+            # Isolate the snp names
+            snp_names = [snp.split(",")[1] for snp in current_snps.sid]
 
-            snp_name = [self.gen.sid[snp_i].split(",")[1]]
-            if self.residual_run:
-                # Run the estimation, hiding its output as its unnecessary (akin to quietly)
-                results = HDFE(demeaned, formula=f"Dosage~{self.formula}").reg_hdfe(self.rank)
+            # Construct a dataframe from the demeaned covariant dataframe and these snps
+            snp_df = pd.DataFrame(dosage).T
+            snp_df.columns = snp_names
+            df = pd.concat([snp_df, self.df], axis=1)
 
-                # Extract the snp name and save the residuals
-                self.output.write_from_list(snp_name + results.resid.astype("string").tolist())
+            # De-mean the snps
+            demeaned = demean(snp_names, df, self.fixed_effects, self.total_obs)
 
-            else:
-                results = HDFE(demeaned, formula=f"{self.phenotype}~Dosage+{self.formula}").reg_hdfe(self.rank)
-                self.output.write_from_list(snp_name + results.results_out("Dosage")[0])
+            for snp in snp_names:
+                if self.residual_run:
+                    # Run the estimation, hiding its output as its unnecessary (akin to quietly)
+                    results = HDFE(demeaned, f"{snp}~{self.formula}").reg_hdfe(self.rank, False)
+
+                    # Extract the snp name and save the residuals
+                    self.output.write_from_list([snp] + results.resid.astype("string").tolist())
+
+                else:
+                    results = HDFE(demeaned, f"{self.phenotype}~{snp}+{self.formula}").reg_hdfe(self.rank, False)
+                    self.output.write_from_list([snp] + results.results_out(snp)[0])
