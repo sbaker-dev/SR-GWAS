@@ -32,7 +32,8 @@ class SrGwas:
         # Load the genetic reference, and sort both it and the external variables so they match on iid
         (self.phenotype, self.covariant, self.fixed_effects, self.clusters), self.formula = self._set_formula()
         self.gen, self.df, self.phenotype, self.genetic_iid = self._setup_variables()
-        self.logger.write(f"Set {self.gen.iid_count} in Genetic file and {len(self.df)} in variable file")
+        self.logger.write(f"Set {self.gen.iid_count} in Genetic file and {len(self.df)} in variable file with RHS of"
+                          f"{self.formula}")
 
         self.total_obs = len(self.df)
         self.rank = cal_df(self.df, self.fixed_effects)
@@ -216,6 +217,7 @@ class SrGwas:
             # Transform bgen dosage of [0, 1, 0] -> 0, 1, or 2 respectively.
             dosage = sum(np.array([snp * i for i, snp in enumerate(current_snps.read(dtype=np.int8).val.T)],
                                   dtype=np.int8))
+            self.logger.write(f"Loaded Chunk {chunk_id}: {terminal_time()}")
 
             # Isolate the snp names
             snp_names = [snp.split(",")[1] for snp in current_snps.sid]
@@ -231,7 +233,10 @@ class SrGwas:
             # De-mean the snps
             demeaned = demean(snp_names, df, self.fixed_effects, self.total_obs)
 
-            for snp in snp_names:
+            for i, snp in enumerate(snp_names):
+                if i % (self.iter_size / 10) == 0:
+                    self.logger.write(f"snp {i}/{len(snp_chunk)}: {terminal_time()}")
+
                 if self.residual_run:
                     # Run the estimation, hiding its output as its unnecessary (akin to quietly)
                     results = HDFE(demeaned, f"{snp}~{self.formula}").reg_hdfe(self.rank, False)
