@@ -15,7 +15,7 @@ class SrGwas:
 
         # Load the args from the yaml file
         self.args = load_yaml(args)
-        self.residual_run = self.args["residuals"]
+        self.residualise = self.args["residuals"]
         self.write_dir = self.args["output_directory"]
 
         # Set the gen file info
@@ -38,11 +38,12 @@ class SrGwas:
         self.total_obs = len(self.df)
         self.rank = cal_df(self.df, self.fixed_effects)
         self.iter_size = self.args["array_size"]
+        self.res_file = None
 
         # Set output file
         if self.args["method"] != "set_snp_ids":
             self.output = FileOut(validate_path(self.write_dir), self.file_name, "csv")
-            if self.residual_run:
+            if self.residualise:
                 self.output.write_from_list(["Snp"] + [iid for fid, iid in self.gen.iid])
             else:
                 self.output.write_from_list(["Snp"] + ["coef", "std_err", "pvalue", "obs", "95%lower", "95%upper"])
@@ -93,14 +94,14 @@ class SrGwas:
         [self._validate_variable(df, cont, "Continuous") for cont in self.covariant]
         [self._validate_variable(df, cont, "Fixed_Effect") for cont in self.fixed_effects]
         [self._validate_variable(df, cont, "Cluster") for cont in self.clusters]
-        if not self.residual_run:
+        if not self.residualise:
             assert self.args["phenotype"], "GWAS requires a phenotype"
 
         # Recast IID as an int
-        df["IID"] = [int(re.sub(r'[\D]', "", str(iid))) for iid in df["IID"].tolist()]
+        df["IID"] = [self._strip_iid(iid) for iid in df["IID"].tolist()]
 
         # Isolate the IID to match against the variables IID and create the reference
-        genetic_iid = np.array([int(re.sub(r'[\D]', "", iid)) for fid, iid in gen.iid])
+        genetic_iid = np.array([self._strip_iid(iid) for _, iid in gen.iid])
         genetic_position = gen.iid
 
         # Remove any IID that is in the external data array but not in the genetic array
@@ -129,6 +130,10 @@ class SrGwas:
         genetic_iid = pd.DataFrame(genetic_iid)
         genetic_iid.columns = ["IID"]
 
+        # Remove nulls
+        if "null" in self.covariant:
+            self.covariant = []
+
         # Remove non used data to save memory
         return gen, df[["IID"] + self.phenotype + self.covariant + self.fixed_effects + self.clusters], \
             self.phenotype[0], genetic_iid
@@ -155,7 +160,13 @@ class SrGwas:
     @staticmethod
     def _validate_variable(variables, v, var_type):
         """Check the variable exists within the columns"""
-        assert v in variables.columns, f"{var_type} variable {v} not in variables {variables.columns}"
+        if v and v != "null":
+            assert v in variables.columns, f"{var_type} variable {v} not in variables {variables.columns}"
+
+    @staticmethod
+    def _strip_iid(iid):
+        """Strip IID of any non numeric characters"""
+        return int(re.sub(r'[\D]', "", str(iid)))
 
     def _select_snps(self):
         """
@@ -206,8 +217,11 @@ class SrGwas:
         """
         # Isolate which snps are to be used
         snp_ids = self._select_snps()
-
         snp_chunk_list = chunk_list(snp_ids, self.iter_size)
+
+        if self.args["use_genetic_residuals"]:
+            self.res_file = open(validate_path(self.args["residual_file"]))
+            self.res_file.readline()
 
         for chunk_id, snp_chunk in enumerate(snp_chunk_list, 1):
             self.logger.write(f"Chunk {chunk_id} of {len(snp_chunk_list)}")
@@ -240,12 +254,29 @@ class SrGwas:
                 if i % (self.iter_size / 10) == 0:
                     self.logger.write(f"snp {i}/{len(snp_chunk)}: {terminal_time()}")
 
-                if self.residual_run:
+                if self.residualise:
                     # Run the estimation, hiding its output as its unnecessary (akin to quietly)
                     results = HDFE(df, f"{snp}~{self.formula}").reg_hdfe(self.rank, False)
 
                     # Extract the snp name and save the residuals
                     self.output.write_from_list([snp] + results.resid.astype("string").tolist())
+
+                elif self.res_file:
+                    # Load the residual from the residual file
+                    snp_res = pd.DataFrame(self.res_file.readline().strip().split(",")[1:])
+                    snp_res.columns = [f"{snp}_RES"]
+                    snp_res[f"{snp}_RES"] = snp_res[f"{snp}_RES"].apply(pd.to_numeric)
+
+                    # Merge it into the database
+                    snp_res = pd.concat([self.genetic_iid, snp_res], axis=1)
+                    df = df.merge(snp_res, left_on="IID", right_on="IID")
+
+                    if len(self.covariant) > 0:
+                        results = HDFE(df, f"{self.phenotype}~{snp}+{snp}_RES+{self.formula}").reg_hdfe(
+                            self.rank, False)
+                    else:
+                        results = HDFE(df, f"{self.phenotype}~{snp}+{snp}_RES").reg_hdfe(self.rank, False)
+                    self.output.write_from_list([snp] + results.results_out(snp)[0])
 
                 else:
                     results = HDFE(df, f"{self.phenotype}~{snp}+{self.formula}").reg_hdfe(self.rank, False)
