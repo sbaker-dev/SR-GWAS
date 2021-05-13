@@ -31,7 +31,7 @@ class SrGwas:
 
         # Load the genetic reference, and sort both it and the external variables so they match on iid
         (self.phenotype, self.covariant, self.fixed_effects, self.clusters), self.formula = self._set_formula()
-        self.gen, self.df, self.phenotype = self._setup_variables()
+        self.gen, self.df, self.phenotype, self.genetic_iid = self._setup_variables()
         self.logger.write(f"Set {self.gen.iid_count} in Genetic file and {len(self.df)} in variable file")
 
         self.total_obs = len(self.df)
@@ -123,9 +123,13 @@ class SrGwas:
         variables = demean(self.phenotype + self.covariant, df, self.fixed_effects, len(df))
         self.logger.write(f"Setup external reference {terminal_time()}")
 
+        # Create an IID array of the genetic iid
+        genetic_iid = pd.DataFrame(genetic_iid)
+        genetic_iid.columns = ["IID"]
+
         # Remove non used data to save memory
-        return gen, variables[self.phenotype + self.covariant + self.fixed_effects + self.clusters], \
-            self.phenotype[0]
+        return gen, variables[["IID"] + self.phenotype + self.covariant + self.fixed_effects + self.clusters], \
+            self.phenotype[0], genetic_iid
 
     def _select_file_on_chromosome(self):
         """
@@ -219,7 +223,10 @@ class SrGwas:
             # Construct a dataframe from the demeaned covariant dataframe and these snps
             snp_df = pd.DataFrame(dosage).T
             snp_df.columns = snp_names
-            df = pd.concat([snp_df, self.df], axis=1)
+
+            # Merge this snp data on IID
+            snp_df = pd.concat([self.genetic_iid, snp_df], axis=1)
+            df = self.df.merge(snp_df, left_on="IID", right_on="IID")
 
             # De-mean the snps
             demeaned = demean(snp_names, df, self.fixed_effects, self.total_obs)
