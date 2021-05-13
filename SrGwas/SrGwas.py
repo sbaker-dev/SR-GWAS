@@ -120,8 +120,9 @@ class SrGwas:
             if index != self.args["variable_iid_index"]:
                 df[v] = df[v].apply(pd.to_numeric)
 
-        # Demean the data
-        variables = demean(self.phenotype + self.covariant, df, self.fixed_effects, len(df))
+        # Demean the data if required
+        if len(self.fixed_effects) > 0:
+            df = demean(self.phenotype + self.covariant, df, self.fixed_effects, len(df))
         self.logger.write(f"Setup external reference {terminal_time()}")
 
         # Create an IID array of the genetic iid
@@ -129,7 +130,7 @@ class SrGwas:
         genetic_iid.columns = ["IID"]
 
         # Remove non used data to save memory
-        return gen, variables[["IID"] + self.phenotype + self.covariant + self.fixed_effects + self.clusters], \
+        return gen, df[["IID"] + self.phenotype + self.covariant + self.fixed_effects + self.clusters], \
             self.phenotype[0], genetic_iid
 
     def _select_file_on_chromosome(self):
@@ -231,7 +232,9 @@ class SrGwas:
             df = self.df.merge(snp_df, left_on="IID", right_on="IID")
 
             # De-mean the snps
-            demeaned = demean(snp_names, df, self.fixed_effects, self.total_obs)
+            if len(self.fixed_effects) > 0:
+                df = demean(snp_names, df, self.fixed_effects, self.total_obs)
+                self.logger.write(f"Demeaned Chunk {chunk_id}: {terminal_time()}")
 
             for i, snp in enumerate(snp_names):
                 if i % (self.iter_size / 10) == 0:
@@ -239,11 +242,11 @@ class SrGwas:
 
                 if self.residual_run:
                     # Run the estimation, hiding its output as its unnecessary (akin to quietly)
-                    results = HDFE(demeaned, f"{snp}~{self.formula}").reg_hdfe(self.rank, False)
+                    results = HDFE(df, f"{snp}~{self.formula}").reg_hdfe(self.rank, False)
 
                     # Extract the snp name and save the residuals
                     self.output.write_from_list([snp] + results.resid.astype("string").tolist())
 
                 else:
-                    results = HDFE(demeaned, f"{self.phenotype}~{snp}+{self.formula}").reg_hdfe(self.rank, False)
+                    results = HDFE(df, f"{self.phenotype}~{snp}+{self.formula}").reg_hdfe(self.rank, False)
                     self.output.write_from_list([snp] + results.results_out(snp)[0])
