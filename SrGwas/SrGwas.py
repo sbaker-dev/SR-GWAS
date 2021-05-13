@@ -74,7 +74,7 @@ class SrGwas:
             return formula_transform(f"{self.args['phenotype']}~{rhs}"), rhs
         else:
             _, covariant, fixed_effects, clusters = formula_transform(f"null~{rhs}")
-            return [], covariant, fixed_effects, clusters, rhs
+            return ([], covariant, fixed_effects, clusters), rhs
 
     def _setup_variables(self):
         """
