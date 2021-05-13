@@ -39,6 +39,7 @@ class SrGwas:
         self.rank = cal_df(self.df, self.fixed_effects)
         self.iter_size = self.args["array_size"]
         self.res_file = None
+        self.start_index = 0
 
         # Set output file
         if self.args["method"] != "set_snp_ids":
@@ -217,7 +218,7 @@ class SrGwas:
         """
         # Isolate which snps are to be used
         snp_ids = self._select_snps()
-        snp_chunk_list = chunk_list(snp_ids, self.iter_size)
+        snp_chunk_list = chunk_list(snp_ids[self.start_index:], self.iter_size)
 
         if self.args["use_genetic_residuals"]:
             self.res_file = open(validate_path(self.args["residual_file"]))
@@ -259,7 +260,7 @@ class SrGwas:
                     results = HDFE(df, f"{snp}~{self.formula}").reg_hdfe(self.rank, False)
 
                     # Extract the snp name and save the residuals
-                    self.output.write_from_list([snp] + results.resid.astype("string").tolist())
+                    self.output.write_from_list([snp] + results.resid.astype("string").tolist(), True)
 
                 elif self.res_file:
                     # Load the residual from the residual file
@@ -276,8 +277,8 @@ class SrGwas:
                             self.rank, False)
                     else:
                         results = HDFE(df, f"{self.phenotype}~{snp}+{snp}_RES").reg_hdfe(self.rank, False)
-                    self.output.write_from_list([snp] + results.results_out(snp)[0])
+                    self.output.write_from_list([snp] + results.results_out(snp)[0], True)
 
                 else:
                     results = HDFE(df, f"{self.phenotype}~{snp}+{self.formula}").reg_hdfe(self.rank, False)
-                    self.output.write_from_list([snp] + results.results_out(snp)[0])
+                    self.output.write_from_list([snp] + results.results_out(snp)[0], True)
