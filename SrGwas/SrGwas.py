@@ -39,12 +39,12 @@ class SrGwas:
         self.iter_size = self.args["array_size"]
 
         # Set output file
-        self.output = FileOut(validate_path(self.write_dir), self.file_name, "csv")
-
-        if self.residual_run:
-            self.output.write_from_list(["Snp"] + [iid for fid, iid in self.gen.iid])
-        else:
-            self.output.write_from_list(["Snp"] + ["coef", "std_err", "pvalue", "obs", "95%lower", "95%upper"])
+        if self.args["method"] != "set_snp_ids":
+            self.output = FileOut(validate_path(self.write_dir), self.file_name, "csv")
+            if self.residual_run:
+                self.output.write_from_list(["Snp"] + [iid for fid, iid in self.gen.iid])
+            else:
+                self.output.write_from_list(["Snp"] + ["coef", "std_err", "pvalue", "obs", "95%lower", "95%upper"])
 
         # Start the method that has been assigned if method has been set
         if self.args["method"]:
