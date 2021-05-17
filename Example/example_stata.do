@@ -1,3 +1,12 @@
+/*
+Author : Stephanie von Hinke, Samuel Baker
+Version: 0.2.0
+Date   : 17/05/2021
+Paper  : SR-GWAS
+Purpose: This script tests a single snp on the four models to compare the stata 
+         code principle to python and show they are identifical as well showing 
+		 the full process for a single snp.
+*/
 
 * Import the data
 clear all
