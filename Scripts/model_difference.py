@@ -1,46 +1,47 @@
-from miscSupports import directory_iterator, flatten
-from collections import Counter
-from csvObject import CsvObject
+from miscSupports import directory_iterator, chunk_list
+from csvObject import CsvObject, write_csv
 from pathlib import Path
 import numpy as np
-import re
 
 
-def main_call(out_dir):
+def main_call(out_dir, write_dir, headers):
 
-    all_coefficients = []
-    all_se = []
-    for i in range(1, 23):
-        model_csv = []
-        for model_dir in directory_iterator(out_dir, False):
-            model_csv.append(CsvObject(isolate_chr_file(out_dir, model_dir, i), set_columns=True))
-
-        unique_snps = Counter(flatten([csv[0] for csv in model_csv]))
-        snp = set([snp for snp, count in unique_snps.items() if count == 4])
-        model_rows = [[row for row in model.row_data if row[0] in snp] for model in model_csv]
-
-        all_coefficients.append([[float(row[1]) for row in model] for model in model_rows])
-        all_se.append([[float(row[2]) for row in model] for model in model_rows])
-
-    model_info = []
-    for i in range(4):
-        coefficients = flatten([chromosome[i] for chromosome in all_coefficients])
-        se = flatten([s[i] for s in all_se])
-        model_info.append([np.mean(coefficients), np.mean(se)])
-
-    for r in model_info:
-        print(r)
-
-
-def isolate_chr_file(out_dir, model_dir, chromosome):
-    for file in directory_iterator(Path(out_dir, model_dir)):
+    output = []
+    for file in directory_iterator(out_dir):
         if ".log" not in file:
-            if chromosome == int(re.sub(r'[\D]', "", file.split("_")[1])):
-                return Path(out_dir, model_dir, file)
+            csv_file = CsvObject(Path(output_dir, file))
+
+            # Isolate the model values from the aggregated [snp] + [model 1, ... model N]
+            for row in csv_file.row_data:
+                snp, models = row[0], chunk_list(row[1:], len(headers))
+                output.append([snp, models])
+
+    print(f"For {len(output)} Snps")
+    model_count = len(output[0][1])
+
+    model_comp = []
+    for i in range(model_count):
+        print(f"For model {i+1}")
+
+        # Write out the aggregated chromosome model data to a directory
+        model_out = []
+        for snp, model in output:
+            model_out.append([snp] + model[i])
+        write_csv(write_dir, f"Model{i + 1}", ["Snp"] + headers, model_out)
+
+        # Append the comparision to a master list of models
+        model_comp.append([f"Model {i+1}"] + [str(np.mean([float(values[vi]) for values in model_out]))
+                                              for vi in range(1, 3)])
+
+    # Write the model comp out
+    write_csv(write_dir, "Model Comparision", ["Model", "Mean Coefficent", "Mean Standard Error", "Mean P Values"],
+              model_comp)
 
 
 if __name__ == '__main__':
 
-    output_dir = r"C:\Users\Samuel\PycharmProjects\SR-GWAS\Testing\Output"
+    output_dir = r"C:\Users\Samuel\PycharmProjects\SR-GWAS\Testing\Output\OutputM5"
+    write = r"Z:\UKB\GeographicID\Paper Data Extraction\SB_Papers\SW_GWAS\Output"
+    model_headers = ["coef", "std_err", "pvalue", "obs", "95%lower", "95%upper"]
 
-    main_call(output_dir)
+    main_call(output_dir, write, model_headers)
