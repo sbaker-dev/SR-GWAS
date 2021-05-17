@@ -1,8 +1,8 @@
-from miscSupports import validate_path, directory_iterator, load_yaml, FileOut, terminal_time, chunk_list
-from kdaHDFE import HDFE, demean, formula_transform, cal_df
+from miscSupports import validate_path, directory_iterator, load_yaml, FileOut, terminal_time, chunk_list, flatten
 from csvObject import CsvObject, write_csv
 from bgen_reader import custom_meta_path
 from pysnptools.distreader import Bgen
+import statsmodels.api as sm
 from random import sample
 from pathlib import Path
 import pandas as pd
@@ -15,69 +15,46 @@ class SrGwas:
 
         # Load the args from the yaml file
         self.args = load_yaml(args)
-        self.residualise = self.args["residuals"]
         self.write_dir = self.args["output_directory"]
 
-        # Set the gen file info
-        self.gen_directory = self.args["path_to_gen_files"]
+        # Set the gen file info, set the output path for the memory files, and load the file reference
         self.gen_type = self.args["gen_type"]
+        self.gen_directory = self.args["path_to_gen_files"]
         self.target_chromosome = self.args["target_chromosome"]
         self.file_name = f"{self.args['output_name']}_Chr{self.target_chromosome}"
-
-        # Set the output path for the memory files and load the file reference
         custom_meta_path(validate_path(self.args["memory_file_location"]))
+
+        # Setup logger
         self.logger = FileOut(self.write_dir, self.file_name, "log", True)
         self.logger.write(f"Setup {terminal_time()}")
 
-        # Load the genetic reference, and sort both it and the external variables so they match on iid
-        (self.phenotype, self.covariant, self.fixed_effects, self.clusters), self.formula = self._set_formula()
-        self.gen, self.df, self.phenotype, self.genetic_iid = self._setup_variables()
-        self.logger.write(f"Set {self.gen.iid_count} in Genetic file and {len(self.df)} in variable file with RHS of"
-                          f"{self.formula}")
-
+        # Variable info, load the genetic reference, and sort both it and the external variables so they match on iid
+        self.phenotype = self.args["phenotype"]
+        self.covariant = self.args["covariant"]
+        self.gen, self.df, self.genetic_iid = self._setup_variables()
         self.total_obs = len(self.df)
-        self.rank = cal_df(self.df, self.fixed_effects)
-        self.iter_size = self.args["array_size"]
-        self.res_file = None
-        self.start_index = 0
+        self.logger.write(f"Set {self.gen.iid_count} in Genetic file and {len(self.df)} in variable file for "
+                          f"{self.phenotype}~{self.covariant}")
 
         # Set output file
         if self.args["method"] != "set_snp_ids":
             self.output = FileOut(validate_path(self.write_dir), self.file_name, "csv")
-            if self.residualise:
-                self.output.write_from_list(["Snp"] + [iid for fid, iid in self.gen.iid])
-            else:
-                self.output.write_from_list(["Snp"] + ["coef", "std_err", "pvalue", "obs", "95%lower", "95%upper"])
+            headers = [[f"M{i}_{h}" for h in ["coef", "std_err", "pvalue", "obs", "95%lower", "95%upper"]]
+                       for i in range(1, 5)]
+            self.output.write_from_list(["Snp"] + flatten(headers))
+
+        # System args
+        self.iter_size = self.args["array_size"]
+        self.start_index = 0
 
         # Start the method that has been assigned if method has been set
         if self.args["method"]:
             getattr(self, self.args["method"])()
 
-        self.logger.print_out = True
         self.logger.write(f"Finished predefined {terminal_time()}")
 
     def __repr__(self):
         return f"SrGwas object Controller"
-
-    def _set_formula(self):
-        """
-        Set the stats model left hand side formula for this run
-
-        :return: The string formula for the left hand side of the equation
-        :rtype: (list[str], list[str], list[str], list[str]), str
-        """
-        # Join Each variable with a +
-        cont = "+".join([cont for cont in self.args["continuous_variables"]])
-        fe = "+".join([cont for cont in self.args["fixed_effect_variables"]])
-        cl = "+".join([cont for cont in self.args["cluster_variables"]])
-
-        rhs = f"{cont}|{fe}|{cl}"
-
-        if self.args["phenotype"]:
-            return formula_transform(f"{self.args['phenotype']}~{rhs}"), rhs
-        else:
-            _, covariant, fixed_effects, clusters = formula_transform(f"null~{rhs}")
-            return ([], covariant, fixed_effects, clusters), rhs
 
     def _setup_variables(self):
         """
@@ -93,10 +70,7 @@ class SrGwas:
 
         # Validate that the variables we have set in the formula exist in the DataFrame
         [self._validate_variable(df, cont, "Continuous") for cont in self.covariant]
-        [self._validate_variable(df, cont, "Fixed_Effect") for cont in self.fixed_effects]
-        [self._validate_variable(df, cont, "Cluster") for cont in self.clusters]
-        if not self.residualise:
-            assert self.args["phenotype"], "GWAS requires a phenotype"
+        assert self.args["phenotype"], "GWAS requires a phenotype"
 
         # Recast IID as an int
         df["IID"] = [self._strip_iid(iid) for iid in df["IID"].tolist()]
@@ -119,25 +93,21 @@ class SrGwas:
         gen = gen[gen.iid_to_index(genetic_position[np.argsort(genetic_iid)]), :]
 
         for index, v in enumerate(df.columns):
-            if index != self.args["variable_iid_index"]:
+            if v in [self.phenotype] + [self.covariant]:
                 df[v] = df[v].apply(pd.to_numeric)
-
-        # Demean the data if required
-        if len(self.fixed_effects) > 0:
-            df = demean(self.phenotype + self.covariant, df, self.fixed_effects, len(df))
-        self.logger.write(f"Setup external reference {terminal_time()}")
 
         # Create an IID array of the genetic iid
         genetic_iid = pd.DataFrame(genetic_iid)
         genetic_iid.columns = ["IID"]
 
-        # Remove nulls
-        if "null" in self.covariant:
-            self.covariant = []
+        # Add a constant and the residualised phenotype to the databases
+        df["Constant"] = [1 for _ in range(len(df))]
+        result = sm.OLS(df[self.phenotype], df[self.covariant], missing='drop').fit()
+        df = pd.concat([df, pd.DataFrame(result.resid, columns=[f"{self.phenotype}RES"])], axis=1)
+        self.covariant = self.covariant + ["Constant"]
 
         # Remove non used data to save memory
-        return gen, df[["IID"] + self.phenotype + self.covariant + self.fixed_effects + self.clusters], \
-            self.phenotype[0], genetic_iid
+        return gen, df[["IID", self.phenotype, f"{self.phenotype}RES"] + self.covariant + ["Constant"]], genetic_iid
 
     def _select_file_on_chromosome(self):
         """
@@ -220,10 +190,6 @@ class SrGwas:
         snp_ids = self._select_snps()
         snp_chunk_list = chunk_list(snp_ids[self.start_index:], self.iter_size)
 
-        if self.args["use_genetic_residuals"]:
-            self.res_file = open(validate_path(self.args["residual_file"]))
-            self.res_file.readline()
-
         for chunk_id, snp_chunk in enumerate(snp_chunk_list, 1):
             self.logger.write(f"Chunk {chunk_id} of {len(snp_chunk_list)}")
 
@@ -246,39 +212,48 @@ class SrGwas:
             snp_df = pd.concat([self.genetic_iid, snp_df], axis=1)
             df = self.df.merge(snp_df, left_on="IID", right_on="IID")
 
-            # De-mean the snps
-            if len(self.fixed_effects) > 0:
-                df = demean(snp_names, df, self.fixed_effects, self.total_obs)
-                self.logger.write(f"Demeaned Chunk {chunk_id}: {terminal_time()}")
-
             for i, snp in enumerate(snp_names):
                 if i % (self.iter_size / 10) == 0:
                     self.logger.write(f"snp {i}/{len(snp_chunk)}: {terminal_time()}")
 
-                if self.residualise:
-                    # Run the estimation, hiding its output as its unnecessary (akin to quietly)
-                    results = HDFE(df, f"{snp}~{self.formula}").reg_hdfe(self.rank, False)
+                out_list = [snp]
 
-                    # Extract the snp name and save the residuals
-                    self.output.write_from_list([snp] + results.resid.astype("string").tolist(), True)
+                # Model 1
+                result = sm.OLS(df[self.phenotype], df[[snp] + self.covariant], missing='drop').fit()
+                out_list = out_list + self.results_out(result, snp)
 
-                elif self.res_file:
-                    # Load the residual from the residual file
-                    snp_res = pd.DataFrame(self.res_file.readline().strip().split(",")[1:])
-                    snp_res.columns = [f"{snp}_RES"]
-                    snp_res[f"{snp}_RES"] = snp_res[f"{snp}_RES"].apply(pd.to_numeric)
+                # Model 2
+                result = sm.OLS(df[f"{self.phenotype}RES"], df[[snp, "Constant"]], missing='drop').fit()
+                out_list = out_list + self.results_out(result, snp)
 
-                    # Merge it into the database
-                    snp_res = pd.concat([self.genetic_iid, snp_res], axis=1)
-                    df = df.merge(snp_res, left_on="IID", right_on="IID")
+                # Model 3
+                # Genetic residual
+                g_res = sm.OLS(df[snp], df[self.covariant], missing='drop').fit()
+                g_res = pd.concat([pd.DataFrame(g_res.resid, columns=[snp]), df["Constant"]], axis=1)
 
-                    if len(self.covariant) > 0:
-                        results = HDFE(df, f"{self.phenotype}~{snp}+{snp}_RES+{self.formula}").reg_hdfe(
-                            self.rank, False)
-                    else:
-                        results = HDFE(df, f"{self.phenotype}~{snp}+{snp}_RES").reg_hdfe(self.rank, False)
-                    self.output.write_from_list([snp] + results.results_out(snp)[0], True)
+                result = sm.OLS(df[self.phenotype], g_res, missing='drop').fit()
+                out_list = out_list + self.results_out(result, snp)
 
-                else:
-                    results = HDFE(df, f"{self.phenotype}~{snp}+{self.formula}").reg_hdfe(self.rank, False)
-                    self.output.write_from_list([snp] + results.results_out(snp)[0], True)
+                # Model 4
+                result = sm.OLS(df[f"{self.phenotype}RES"], g_res, missing='drop').fit()
+                out_list = out_list + self.results_out(result, snp)
+                self.output.write_from_list(out_list, True)
+
+    @staticmethod
+    def results_out(results, v_name):
+        """
+        Returns for each variable in the list of variables
+
+        [Parameters, standard error, p values, obs, 95%min CI, 95%max CI]
+
+        :param results: The mostly unadjusted results from OLS bar the degrees of freedom that was adjusted for clusters
+        :type results: statsmodels.regression.linear_model.RegressionResults
+
+        :param v_name: A string of the variable to extract from
+        :type v_name:  str
+
+        :return: A list of lists, where each list are the results in float
+        :rtype:list[list[float, float, float, float, float, float]]
+        """
+        return [results.params[v_name], results.bse[v_name], results.pvalues[v_name], results.nobs] + \
+            results.conf_int().loc[v_name].to_numpy().tolist()
