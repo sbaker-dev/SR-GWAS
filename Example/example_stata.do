@@ -13,6 +13,7 @@ clear all
 set more off
 import delimited "C:\Users\Samuel\PycharmProjects\SR-GWAS\Example\Data\CovariantSnp.csv"
 
+log using "C:\Users\Samuel\PycharmProjects\SR-GWAS\Example\Data\Output.log", replace
 
 * Model 1 **********************************************************************
 
@@ -39,3 +40,5 @@ regress bmi Gres
 * Model 4 **********************************************************************
 * regress residualised BMI on residualised G
 regress BMIres Gres
+
+log close
