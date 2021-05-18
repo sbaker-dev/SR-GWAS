@@ -102,9 +102,9 @@ class SrGwas:
 
         # Add a constant and the residualised phenotype to the databases
         df["Constant"] = [1 for _ in range(len(df))]
+        self.covariant = self.covariant + ["Constant"]
         result = sm.OLS(df[self.phenotype], df[self.covariant], missing='drop').fit()
         df = pd.concat([df, pd.DataFrame(result.resid, columns=[f"{self.phenotype}RES"])], axis=1)
-        self.covariant = self.covariant + ["Constant"]
 
         # Remove non used data to save memory
         return gen, df[["IID", self.phenotype, f"{self.phenotype}RES"] + self.covariant + ["Constant"]], genetic_iid
