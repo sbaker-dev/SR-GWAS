@@ -220,11 +220,11 @@ class SrGwas:
 
                 # Model 1
                 result = sm.OLS(df[self.phenotype], df[[snp] + self.covariant], missing='drop').fit()
-                out_list = out_list + self.results_out(result, snp)
+                out_list = out_list + self.results_out(result, snp, len(self.covariant) + 1)
 
                 # Model 2
                 result = sm.OLS(df[f"{self.phenotype}RES"], df[[snp, "Constant"]], missing='drop').fit()
-                out_list = out_list + self.results_out(result, snp)
+                out_list = out_list + self.results_out(result, snp, 2)
 
                 # Model 3
                 # Genetic residual
@@ -232,15 +232,14 @@ class SrGwas:
                 g_res = pd.concat([pd.DataFrame(g_res.resid, columns=[snp]), df["Constant"]], axis=1)
 
                 result = sm.OLS(df[self.phenotype], g_res, missing='drop').fit()
-                out_list = out_list + self.results_out(result, snp)
+                out_list = out_list + self.results_out(result, snp, 2)
 
                 # Model 4
                 result = sm.OLS(df[f"{self.phenotype}RES"], g_res, missing='drop').fit()
-                out_list = out_list + self.results_out(result, snp)
+                out_list = out_list + self.results_out(result, snp, 2)
                 self.output.write_from_list(out_list, True)
 
-    @staticmethod
-    def results_out(results, v_name):
+    def results_out(self, results, v_name, model_k):
         """
         Returns for each variable in the list of variables
 
@@ -252,8 +251,16 @@ class SrGwas:
         :param v_name: A string of the variable to extract from
         :type v_name:  str
 
+        :param model_k: The n-k of this model to adjust the standard errors
+        :type model_k: int
+
         :return: A list of lists, where each list are the results in float
         :rtype:list[list[float, float, float, float, float, float]]
         """
-        return [results.params[v_name], results.bse[v_name], results.pvalues[v_name], results.nobs] + \
+
+        # Adjust the standard errors
+        std = results.bse[v_name]
+        std = np.sqrt((std ** 2) * ((self.total_obs - model_k) / (self.total_obs - (len(self.covariant) + 1))))
+
+        return [results.params[v_name], std, results.pvalues[v_name], results.nobs] + \
             results.conf_int().loc[v_name].to_numpy().tolist()
