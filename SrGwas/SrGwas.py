@@ -1,9 +1,8 @@
 from miscSupports import validate_path, directory_iterator, load_yaml, FileOut, terminal_time, chunk_list, flatten
-from csvObject import CsvObject, write_csv
 from bgen_reader import custom_meta_path
 from pysnptools.distreader import Bgen
+from csvObject import CsvObject
 import statsmodels.api as sm
-from random import sample
 from pathlib import Path
 from scipy import stats
 import pandas as pd
@@ -25,9 +24,11 @@ class SrGwas:
         self.file_name = f"{self.args['output_name']}_Chr{self.target_chromosome}"
         custom_meta_path(validate_path(self.args["memory_file_location"]))
 
-        # Setup logger
+        # Setup logger and system variables
         self.logger = FileOut(self.write_dir, self.file_name, "log", True)
         self.logger.write(f"Setup {terminal_time()}")
+        self.iter_size = self.args["array_size"]
+        self.start_index = 0
 
         # Variable info, load the genetic reference, and sort both it and the external variables so they match on iid
         self.phenotype = self.args["phenotype"]
@@ -38,27 +39,20 @@ class SrGwas:
                           f"{self.phenotype}~{self.covariant}")
 
         # Check that we only have a single version of phenotypic columns, if the file contained one of these names this
-        # could by why we now have duplicates
+        # could be why we now have duplicates
         if len(self.df[f"{self.phenotype}RES"].shape) > 1:
             self.logger.write(f"Found a duplicated column for phenotypic residuals, removing")
             self.df = self.df.loc[:, ~self.df.columns.duplicated()]
 
         # Set output file
-        if self.args["method"] != "set_snp_ids":
-            self.output = FileOut(validate_path(self.write_dir), self.file_name, "csv")
-            headers = [[f"M{i}_{h}" for h in ["coef", "std_err", "pvalue", "obs", "r2", "chi2tail", "95%lower",
-                                              "95%upper"]]
-                       for i in range(1, 5)]
-            self.output.write_from_list(["Snp"] + flatten(headers))
+        self.output = FileOut(validate_path(self.write_dir), self.file_name, "csv")
+        headers = [[f"M{i}_{h}" for h in ["coef", "std_err", "pvalue", "obs", "r2", "chi2tail", "95%lower",
+                                          "95%upper"]]
+                   for i in range(1, 5)]
+        self.output.write_from_list(["Snp"] + flatten(headers))
 
-        # System args
-        self.iter_size = self.args["array_size"]
-        self.start_index = 0
-
-        # Start the method that has been assigned if method has been set
-        if self.args["method"]:
-            getattr(self, self.args["method"])()
-
+        # Start the validation GWAS
+        self.residual_gwas()
         self.logger.write(f"Finished predefined {terminal_time()}")
 
     def __repr__(self):
@@ -100,6 +94,7 @@ class SrGwas:
         df = df.sort_values(by=['IID'], ascending=True)
         gen = gen[gen.iid_to_index(genetic_position[np.argsort(genetic_iid)]), :]
 
+        # Load phenotypic and covariant variables as numeric
         for index, v in enumerate(df.columns):
             if v in [self.phenotype] + [self.covariant]:
                 df[v] = df[v].apply(pd.to_numeric)
@@ -160,7 +155,7 @@ class SrGwas:
         else:
             return [i for i in range(self.gen.sid_count)]
 
-    def gwas(self):
+    def residual_gwas(self):
         """
         Create genetic residuals by regressing your covariant on the snp or run a more traditional gwas of
 
@@ -184,43 +179,60 @@ class SrGwas:
                                   dtype=np.int8))
             self.logger.write(f"Loaded Chunk {chunk_id}: {terminal_time()}")
 
-            # Isolate the snp names
+            # Isolate the snp names, and use them to create a dataframe of the dosage data
             snp_names = [snp.split(",")[1] for snp in current_snps.sid]
-
-            # Construct a dataframe from the demeaned covariant dataframe and these snps
             snp_df = pd.DataFrame(dosage).T
             snp_df.columns = snp_names
 
-            # Merge this snp data on IID
+            # Create a new dataframe from the merge of the snp data on IID to the master df
             snp_df = pd.concat([self.genetic_iid, snp_df], axis=1)
             df = self.df.merge(snp_df, left_on="IID", right_on="IID")
 
-            for i, snp in enumerate(snp_names):
-                if i % (self.iter_size / 10) == 0:
-                    self.logger.write(f"snp {i}/{len(snp_chunk)}: {terminal_time()}")
+            # Run the regressions for each snp in this chunk
+            [self.model_regressions(df, i, snp, snp_chunk) for i, snp in enumerate(snp_names)]
 
-                # Define the output list
-                out_list = [snp]
+    def model_regressions(self, df, i, snp, snp_chunk):
+        """
+        Run 4 models of Traditional OLS, phenotypic residualised, genetic residualised, and then genetic residualised
+        on phenotypic residualised
 
-                # Model 1: Traditional OLS
-                result = sm.OLS(df[self.phenotype], df[[snp] + self.covariant], missing='drop').fit()
-                out_list = out_list + self.results_out(result, snp, len(self.covariant) + 1)
+        :param df: Data frame for this set of snps
+        :type df: pd.DataFrame
 
-                # Model 2: Phenotypic Residual
-                result = sm.OLS(df[f"{self.phenotype}RES"], df[[snp, "Constant"]], missing='drop').fit()
-                out_list = out_list + self.results_out(result, snp, 2)
+        :param i: Index of this snp
+        :type i: int
 
-                # Model 3: Genetic residual
-                g_res = sm.OLS(df[snp], df[self.covariant], missing='drop').fit()
-                g_res = pd.concat([pd.DataFrame(g_res.resid, columns=[snp]), df["Constant"]], axis=1)
+        :param snp: The snp name for this regression run
+        :type snp: str
 
-                result = sm.OLS(df[self.phenotype], g_res, missing='drop').fit()
-                out_list = out_list + self.results_out(result, snp, 2)
+        :param snp_chunk:
+        :return:
+        """
+        if i % (self.iter_size / 10) == 0:
+            self.logger.write(f"snp {i}/{len(snp_chunk)}: {terminal_time()}")
 
-                # Model 4: Genetic residual on phenotypic residuals
-                result = sm.OLS(df[f"{self.phenotype}RES"], g_res, missing='drop').fit()
-                out_list = out_list + self.results_out(result, snp, 2)
-                self.output.write_from_list(out_list, True)
+        # Define the output list
+        out_list = [snp]
+
+        # Model 1: Traditional OLS
+        result = sm.OLS(df[self.phenotype], df[[snp] + self.covariant], missing='drop').fit()
+        out_list = out_list + self.results_out(result, snp, len(self.covariant) + 1)
+
+        # Model 2: Phenotypic Residual
+        result = sm.OLS(df[f"{self.phenotype}RES"], df[[snp, "Constant"]], missing='drop').fit()
+        out_list = out_list + self.results_out(result, snp, 2)
+
+        # Model 3: Genetic residual
+        g_res = sm.OLS(df[snp], df[self.covariant], missing='drop').fit()
+        g_res = pd.concat([pd.DataFrame(g_res.resid, columns=[snp]), df["Constant"]], axis=1)
+
+        result = sm.OLS(df[self.phenotype], g_res, missing='drop').fit()
+        out_list = out_list + self.results_out(result, snp, 2)
+
+        # Model 4: Genetic residual on phenotypic residuals
+        result = sm.OLS(df[f"{self.phenotype}RES"], g_res, missing='drop').fit()
+        out_list = out_list + self.results_out(result, snp, 2)
+        self.output.write_from_list(out_list, True)
 
     def results_out(self, results, v_name, model_k, alpha=0.05):
         """
