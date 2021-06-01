@@ -5,6 +5,7 @@ from pysnptools.distreader import Bgen
 import statsmodels.api as sm
 from random import sample
 from pathlib import Path
+from scipy import stats
 import pandas as pd
 import numpy as np
 import re
@@ -222,46 +223,58 @@ class SrGwas:
                 if i % (self.iter_size / 10) == 0:
                     self.logger.write(f"snp {i}/{len(snp_chunk)}: {terminal_time()}")
 
+                # Define the output list
                 out_list = [snp]
 
-                # Model 1
+                # Model 1: Traditional OLS
                 result = sm.OLS(df[self.phenotype], df[[snp] + self.covariant], missing='drop').fit()
                 out_list = out_list + self.results_out(result, snp, len(self.covariant) + 1)
 
-                # Model 2
+                # Model 2: Phenotypic Residual
                 result = sm.OLS(df[f"{self.phenotype}RES"], df[[snp, "Constant"]], missing='drop').fit()
                 out_list = out_list + self.results_out(result, snp, 2)
 
-                # Model 3
-                # Genetic residual
+                # Model 3: Genetic residual
                 g_res = sm.OLS(df[snp], df[self.covariant], missing='drop').fit()
                 g_res = pd.concat([pd.DataFrame(g_res.resid, columns=[snp]), df["Constant"]], axis=1)
 
                 result = sm.OLS(df[self.phenotype], g_res, missing='drop').fit()
                 out_list = out_list + self.results_out(result, snp, 2)
 
-                # Model 4
+                # Model 4: Genetic residual on phenotypic residuals
                 result = sm.OLS(df[f"{self.phenotype}RES"], g_res, missing='drop').fit()
                 out_list = out_list + self.results_out(result, snp, 2)
                 self.output.write_from_list(out_list, True)
 
-    def results_out(self, results, v_name, model_k):
+    def results_out(self, results, v_name, model_k, alpha=0.05):
         """
         Returns for each variable in the list of variables
 
         [Parameters, standard error, p values, obs, 95%min CI, 95%max CI]
 
+        Notes
+        -----
+        To make models cross comparable results are adjusted
+
+        For the coefficients, we use the squared T statistics, using the sample size N as the denominator in the
+        variance estimator (RSS/N) instead of RSS/(N-k_2). Standard errors are adjusted based the number of covariants
+        selected, rather than the n - k -1 of the model. Confidence intervals are adjusted on the standard normal
+        distribution.
+
         :param results: The mostly unadjusted results from OLS bar the degrees of freedom that was adjusted for clusters
         :type results: statsmodels.regression.linear_model.RegressionResults
 
         :param v_name: A string of the variable to extract from
-        :type v_name:  str
+        :type v_name: str
 
         :param model_k: The n-k of this model to adjust the standard errors
         :type model_k: int
 
+        :param alpha: The Significance level for the confidence interval, defaults to 0.05 for a 95% confidence interval
+        :type alpha: float
+
         :return: A list of lists, where each list are the results in float
-        :rtype:list[list[float, float, float, float, float, float]]
+        :rtype: list[list[float, float, float, float, float, float]]
         """
 
         # Adjust the coefficient
@@ -273,5 +286,11 @@ class SrGwas:
         std_raw = results.bse[v_name]
         std_adj = np.sqrt((std_raw ** 2) * ((self.total_obs - model_k) / (self.total_obs - (len(self.covariant) + 1))))
 
-        return [estimate_adj, std_adj, results.pvalues[v_name], results.nobs] + \
-            results.conf_int().loc[v_name].to_numpy().tolist()
+        # Use adjusted standard errors
+        dist = stats.norm
+        q = dist.ppf(1 - alpha / 2)
+        lower_adj = estimate_adj - (q * std_adj)
+        upper_adj = estimate_adj + (q * std_adj)
+
+        # Return the coefficient, standard errors, place values, obs, and lower + upper 95% CI
+        return [estimate_adj, std_adj, results.pvalues[v_name], results.nobs, lower_adj, upper_adj]
