@@ -46,7 +46,8 @@ class SrGwas:
         # Set output file
         if self.args["method"] != "set_snp_ids":
             self.output = FileOut(validate_path(self.write_dir), self.file_name, "csv")
-            headers = [[f"M{i}_{h}" for h in ["coef", "std_err", "pvalue", "obs", "95%lower", "95%upper"]]
+            headers = [[f"M{i}_{h}" for h in ["coef", "std_err", "pvalue", "obs", "r2", "chi2tail", "95%lower",
+                                              "95%upper"]]
                        for i in range(1, 5)]
             self.output.write_from_list(["Snp"] + flatten(headers))
 
@@ -292,5 +293,9 @@ class SrGwas:
         lower_adj = estimate_adj - (q * std_adj)
         upper_adj = estimate_adj + (q * std_adj)
 
+        # Calculate the two tailed chi squared test
+        chi2tail = 1 - stats.chi2.cdf(estimate_adj, df=1)
+
         # Return the coefficient, standard errors, place values, obs, and lower + upper 95% CI
-        return [estimate_adj, std_adj, results.pvalues[v_name], results.nobs, lower_adj, upper_adj]
+        return [estimate_adj, std_adj, results.pvalues[v_name], results.nobs, results.rsquared, chi2tail,
+                lower_adj, upper_adj]
