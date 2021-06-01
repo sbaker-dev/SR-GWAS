@@ -264,9 +264,14 @@ class SrGwas:
         :rtype:list[list[float, float, float, float, float, float]]
         """
 
-        # Adjust the standard errors
-        std = results.bse[v_name]
-        std = np.sqrt((std ** 2) * ((self.total_obs - model_k) / (self.total_obs - (len(self.covariant) + 1))))
+        # Adjust the coefficient
+        snp_estimate = results.params[v_name]
+        snp_variance = results.cov_params()[v_name][v_name]
+        estimate_adj = (snp_estimate ** 2) / snp_variance * (results.nobs / results.df_resid)
 
-        return [results.params[v_name], std, results.pvalues[v_name], results.nobs] + \
+        # Adjust the standard errors
+        std_raw = results.bse[v_name]
+        std_adj = np.sqrt((std_raw ** 2) * ((self.total_obs - model_k) / (self.total_obs - (len(self.covariant) + 1))))
+
+        return [estimate_adj, std_adj, results.pvalues[v_name], results.nobs] + \
             results.conf_int().loc[v_name].to_numpy().tolist()
