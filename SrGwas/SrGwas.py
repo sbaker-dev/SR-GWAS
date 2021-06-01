@@ -36,6 +36,12 @@ class SrGwas:
         self.logger.write(f"Set {self.gen.iid_count} in Genetic file and {len(self.df)} in variable file for "
                           f"{self.phenotype}~{self.covariant}")
 
+        # Check that we only have a single version of phenotypic columns, if the file contained one of these names this
+        # could by why we now have duplicates
+        if len(self.df[f"{self.phenotype}RES"].shape) > 1:
+            self.logger.write(f"Found a duplicated column for phenotypic residuals, removing")
+            self.df = self.df.loc[:, ~self.df.columns.duplicated()]
+
         # Set output file
         if self.args["method"] != "set_snp_ids":
             self.output = FileOut(validate_path(self.write_dir), self.file_name, "csv")
