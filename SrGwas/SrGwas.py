@@ -262,6 +262,9 @@ class SrGwas:
         selected, rather than the n - k -1 of the model. Confidence intervals are adjusted on the standard normal
         distribution.
 
+        chi2tail is attempting to replicate the stata code of chi2tail, where this is 1 - chi2(df, x) and chi2 is
+        gammap(df/2, x/2)
+
         :param results: The mostly unadjusted results from OLS bar the degrees of freedom that was adjusted for clusters
         :type results: statsmodels.regression.linear_model.RegressionResults
 
