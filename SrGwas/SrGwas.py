@@ -28,7 +28,7 @@ class SrGwas:
         self.logger = FileOut(self.write_dir, self.file_name, "log", True)
         self.logger.write(f"Setup {terminal_time()}")
         self.iter_size = self.args["array_size"]
-        self.start_index = 0
+        self.start_index = self.args["start_index"]
 
         # Variable info, load the genetic reference, and sort both it and the external variables so they match on iid
         self.phenotype = self.args["phenotype"]
