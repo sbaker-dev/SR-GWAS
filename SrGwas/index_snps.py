@@ -35,11 +35,20 @@ def set_snp_ids(memory_location, snps_to_id, gen_path, write_dir, file_name):
     custom_meta_path(validate_path(memory_location))
     gen = Bgen(str(validate_path(gen_path).absolute()))
 
-    # If the snps_to_id is a str, assume a path and index the snps in the csv
-    snps = CsvObject(validate_path(snps_to_id), set_columns=True)[0]
-    snp_list = [f"{snp},{snp}" for snp in snps]
-    snp_list = gen.sid_to_index(snp_list).tolist()
+    # Construct a lookup dict for variant_id-rsid
+    v_dict = {snp[1]: snp[0] for snp in [snp.split(",") for snp in gen.sid]}
 
-    # Write the snps out
-    write_csv(write_dir, f"{file_name}_Snps", ["Snp"], snp_list)
+    # Load the list of snps to validate
+    snps_list = CsvObject(validate_path(snps_to_id), set_columns=True)[0]
+
+    # Get the index of each snp that is present
+    snp_indexes = []
+    for snp in snps_list:
+        try:
+            snp_indexes.append(gen.sid_to_index([f"{v_dict[snp]},{snp}"]))
+        except KeyError:
+            print(f"Failed to find {snp}")
+
+    # Write the snp indexes out
+    write_csv(write_dir, f"{file_name}", ["Snp"], snp_indexes)
     print(f"Constructed snp id list {terminal_time()}")
