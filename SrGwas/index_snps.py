@@ -45,10 +45,10 @@ def set_snp_ids(memory_location, snps_to_id, gen_path, write_dir, file_name):
     snp_indexes = []
     for snp in snps_list:
         try:
-            snp_indexes.append(gen.sid_to_index([f"{v_dict[snp]},{snp}"]))
+            snp_indexes.append(gen.sid_to_index([f"{v_dict[snp]},{snp}"]).tolist())
         except KeyError:
             print(f"Failed to find {snp}")
 
     # Write the snp indexes out
     write_csv(write_dir, f"{file_name}", ["Snp"], snp_indexes)
-    print(f"Constructed snp id list {terminal_time()}")
+    print(f"Constructed snp id list of length {len(snp_indexes)} for {gen_path} at {terminal_time()}")
