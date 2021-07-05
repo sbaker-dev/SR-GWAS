@@ -286,6 +286,9 @@ class SrGwas:
         # Calculate the two tailed chi squared test
         chi2tail = 1 - stats.chi2.cdf(estimate_adj, df=1)
 
+        # Calculate the 2 tail p value from the t stat of estimate_aj / std_adj
+        p_value = 2 * stats.t.sf(np.abs(estimate_adj / std_adj), results.df_resid)
+
         # Return the coefficient, standard errors, place values, obs, and lower + upper 95% CI
-        return [estimate_adj, std_adj, results.pvalues[v_name], results.nobs, results.rsquared, chi2tail,
+        return [estimate_adj, std_adj, p_value, results.nobs, results.rsquared, chi2tail,
                 lower_adj, upper_adj]
